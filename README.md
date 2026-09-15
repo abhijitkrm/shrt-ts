@@ -7,8 +7,10 @@ Architecture chosen by measurement, not default — see [Performance](#performan
 - **HTTP**: `uWebSockets.js` (C++ engine) default; `node:http` + `node:cluster` fallback (`SERVER=node`)
 - **Storage**: custom append-only-log (AOF) — in-memory `Map` index + batched `write()`/`fsync`.
   Reads never touch disk; writes are ~ns enqueue + one syscall batch per 5 ms.
-- **Codes**: `encode(instance * 2³² + seq)` → base62. Globally unique across processes
-  with zero coordination (no shared counter, no distributed lock).
+- **Codes**: 8 chars = `ALPHABET[instance]` + 7 random base62 chars (62⁷ ≈ 3.5T
+  per instance). The prefix shard-marks every code — unique across processes with
+  zero coordination, and a read-miss knows exactly which sibling log to tail.
+  Checked against the index and retried on collision.
 - **Multi-instance**: per-instance log shards (`data-<i>.log`); siblings discovered and
   tailed **lazily on read-miss** — writes never pay replication cost, so write
   throughput scales ~linearly with instance count.
@@ -39,7 +41,8 @@ pnpm bench            # build + spawn real servers + autocannon scenarios
 | `GET` | `/api/stats/{code}` | `{code, url, hits, created_at, expires_at}` |
 | `GET` | `/api/health` | `{ok: true}` |
 
-Codes/aliases: `[0-9A-Za-z_-]{1,64}`. Single POST body ≤4 KB.
+Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
+7 random). Aliases: `[0-9A-Za-z_-]{1,64}`. Single POST body ≤4 KB.
 
 ## Config (env)
 
@@ -50,7 +53,7 @@ Codes/aliases: `[0-9A-Za-z_-]{1,64}`. Single POST body ≤4 KB.
 | `SERVER` | `uws` | `uws` or `node` |
 | `WORKERS` | `1` | processes: uWS binds `PORT+i`, node shares `PORT` |
 | `INSTANCE` | auto | instance id (auto-claimed via `instance-<i>.lock` files) |
-| `SEED` | `0` | bulk-insert N links if empty (codes `1..N`) |
+| `SEED` | `0` | bulk-insert N links if empty (random codes) |
 | `HITS` | `1` | `0` disables hit counting (removes ~2 map ops/redirect) |
 | `TAIL_MS` | `0` | >0 enables periodic sibling-log polling (on-miss always on) |
 
@@ -116,15 +119,69 @@ machine at ~1-2M/s even with perfect scaling. 100M/s over HTTP needs a fleet
 ### Consistency model
 
 - Own writes: visible immediately (in-memory index), durable ≤5 ms.
-- Sibling writes: visible after a read-miss triggers a tail (rate-limited 200 ms)
-  or after `TAIL_MS` periodic polling if enabled.
+- Sibling writes: a read-miss tails the shard owning the code's prefix (or all
+  shards for aliases, rate-limited 200 ms); `TAIL_MS` periodic polling optional.
 - Alias collision across instances within the convergence window: last-writer-wins.
 - Hit counts merge via delta lines; per-proc stats eventually consistent.
+
+## Run on a server
+
+Requires Node ≥ 18 (uWS ships prebuilt linux-x64/arm64 binaries). One host,
+one data dir:
+
+```sh
+git clone <repo> && cd urlshort-ts
+pnpm install && pnpm build
+sudo mkdir -p /var/lib/urlshort
+DATA_DIR=/var/lib/urlshort PORT=8080 node dist/index.js
+```
+
+systemd unit (`/etc/systemd/system/urlshort.service`):
+
+```ini
+[Unit]
+Description=urlshort
+After=network.target
+
+[Service]
+Environment=DATA_DIR=/var/lib/urlshort PORT=8080 SERVER=uws WORKERS=8
+WorkingDirectory=/opt/urlshort
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`WORKERS=8` binds ports `8080..8087` — put nginx/HAProxy in front:
+
+```nginx
+upstream urlshort {
+    least_conn;
+    server 127.0.0.1:8080; server 127.0.0.1:8081;
+    server 127.0.0.1:8082; server 127.0.0.1:8083;
+    server 127.0.0.1:8084; server 127.0.0.1:8085;
+    server 127.0.0.1:8086; server 127.0.0.1:8087;
+}
+server { listen 80; location / { proxy_pass http://urlshort; } }
+```
+
+Notes:
+
+- **All instances must share one host** — replication is file-based; multi-host
+  writes need an external store (or shard at the LB: generated codes carry their
+  instance prefix in `code[0]`, so an LB can route `/{code}` by first char).
+- `DATA_DIR` on local SSD; backup = copy the directory (crash-safe up to the
+  last fsync). Run `store.compact()` periodically to bound log growth.
+- No fsync per write — that's the throughput trade. If you need it, add
+  `aof.sync()` after `flush()` in `Store` (expect ~10-20k writes/s instead).
+- Tune file limits: `LimitNOFILE` above + `ulimit -n`.
 
 ## Layout
 
 ```
-src/base62.ts   id -> short code
+src/base62.ts   base62 alphabet/encode; code space: prefix + random suffix
 src/aof.ts      append-only log: buffered writes, replay, tailing, instance locks
 src/store.ts    in-memory index + write-behind + multi-instance merge
 src/app.ts      transport-agnostic handle() + node:http adapter

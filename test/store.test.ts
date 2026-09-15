@@ -16,10 +16,13 @@ test("base62 encode", () => {
   assert.equal(encode(3843), "ZZ");
 });
 
-test("shorten generates short codes", () => {
+test("shorten generates random 8-char codes", () => {
   const s = new Store(":memory:");
-  assert.equal(s.shorten("https://example.com"), "1");
-  assert.equal(s.shorten("https://example.org"), "2");
+  const a = s.shorten("https://example.com")!;
+  const b = s.shorten("https://example.org")!;
+  assert.match(a, /^[0-9a-zA-Z]{8}$/);
+  assert.match(b, /^[0-9a-zA-Z]{8}$/);
+  assert.notEqual(a, b);
   s.close();
 });
 
@@ -86,13 +89,14 @@ test("data persists across reopen (rows + hits)", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("codes stay unique across instances", () => {
+test("codes are prefix-sharded across instances", () => {
   const dir = tmp();
   const a = new Store(dir, 0);
   const b = new Store(dir, 1);
   const ca = a.shorten("https://a.com")!;
   const cb = b.shorten("https://b.com")!;
   assert.notEqual(ca, cb);
+  assert.notEqual(ca[0], cb[0]); // instance prefix guarantees disjoint spaces
   a.close();
   b.close();
   rmSync(dir, { recursive: true, force: true });

@@ -16,12 +16,13 @@ for i in $(seq 1 50); do curl -sf "$BASE/api/health" >/dev/null 2>&1 && break; s
 echo "== health =="
 curl -s "$BASE/api/health"; echo
 
-echo "== POST /api/shorten =="
-curl -s -X POST "$BASE/api/shorten" -H 'content-type: application/json' \
-  -d '{"url":"https://devin.ai/docs"}'; echo
+echo "== POST /api/shorten (random 8-char code) =="
+CODE=$(curl -s -X POST "$BASE/api/shorten" -H 'content-type: application/json' \
+  -d '{"url":"https://devin.ai/docs"}' | sed -E 's/.*"code":"([^"]+)".*/\1/')
+echo "code=$CODE"
 
 echo "== GET /{code} (302) =="
-curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" "$BASE/1"
+curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" "$BASE/$CODE"
 
 echo "== POST /api/shorten with alias =="
 curl -s -X POST "$BASE/api/shorten" -H 'content-type: application/json' \
@@ -36,8 +37,8 @@ echo "== POST /api/shorten/bulk =="
 curl -s -X POST "$BASE/api/shorten/bulk" -H 'content-type: application/json' \
   -d '{"urls":["https://a.com","https://b.com","https://c.com"]}'; echo
 
-echo "== GET /api/stats/1 (shows hit count) =="
-curl -s "$BASE/api/stats/1"; echo
+echo "== GET /api/stats/{code} (shows hit count) =="
+curl -s "$BASE/api/stats/$CODE"; echo
 
 echo "== ttl_ms=1 link -> expires =="
 TTL_CODE=$(curl -s -X POST "$BASE/api/shorten" -H 'content-type: application/json' \

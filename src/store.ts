@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { writeFileSync, renameSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import {
   Aof,
   replayFile,
@@ -7,7 +8,7 @@ import {
   claimInstance,
   shardFiles,
 } from "./aof.js";
-import { encode } from "./base62.js";
+import { ALPHABET } from "./base62.js";
 
 export interface Link {
   code: string;
@@ -31,8 +32,8 @@ const FSYNC_MS = 500;
 const TAIL_MS = Number(process.env.TAIL_MS ?? 0); // 0 = lazy on-miss only
 const TAIL_MIN_INTERVAL = 200;
 const FLUSH_BYTES = 256 << 10;
-const ID_STRIDE = 1 << 32; // instance * 2^32 + seq -> globally unique code space
-const SNAP_BYTES = 64 << 20;
+const CODE_LEN = 8; // 1 instance-prefix char + 7 random base62 chars
+const MAX_INSTANCES = ALPHABET.length; // prefix char space
 const MAX_STRAY_HITS = 10_000;
 const TRACK_HITS = process.env.HITS !== "0";
 
@@ -54,8 +55,10 @@ const rowLine = (
  * In-memory KV + append-only-log persistence.
  * - reads: pure Map.get (no disk, no SQL)
  * - writes: map.set + buffered append; fsync batch every FLUSH_MS (<=5ms loss window)
- * - multi-instance: per-instance log shards (data-<i>.log), siblings tailed
- *   every TAIL_MS -> ~250ms cross-instance convergence, disjoint code space
+ * - multi-instance: per-instance log shards (data-<i>.log). Generated codes
+ *   are 8 chars: ALPHABET[instance] + 7 random base62 chars — the prefix
+ *   keeps codes unique across instances with zero coordination and lets a
+ *   read-miss tail exactly the owning shard's log.
  */
 export class Store {
   private data = new Map<string, Entry>();
@@ -63,8 +66,8 @@ export class Store {
   private strayHits = new Map<string, { t: number; o: number }>();
   private aof: Aof | null = null;
   private instance = 0;
+  private prefix = ALPHABET[0];
   private release: () => void = noop;
-  private seq = 1;
   private dir = "";
   private ownName = "";
   private tails = new Map<string, TailReader>();
@@ -79,6 +82,10 @@ export class Store {
           ? { id: instance, release: noop }
           : claimInstance(dir);
       this.instance = claim.id;
+      if (this.instance >= MAX_INSTANCES) {
+        throw new Error(`instance ${this.instance} >= max ${MAX_INSTANCES}`);
+      }
+      this.prefix = ALPHABET[this.instance];
       this.release = claim.release;
       this.dir = dir;
       this.ownName = `data-${this.instance}.log`;
@@ -136,7 +143,6 @@ export class Store {
     };
     this.strayHits.delete(o.c);
     this.data.set(o.c, entry);
-    if (o.i === this.instance) this.seq++;
   }
 
   /** Replay snapshot + own log + all sibling logs present at boot. */
@@ -173,8 +179,21 @@ export class Store {
     this.pollTails();
   }
 
+  private randSuffix(buf: Buffer, off: number): string {
+    let s = "";
+    for (let k = 0; k < CODE_LEN - 1; k++) {
+      s += ALPHABET[buf[off + k] % MAX_INSTANCES];
+    }
+    return s;
+  }
+
+  /** 8-char code: instance prefix + random suffix, retried on collision. */
   private allocCode(): string {
-    return encode(this.instance * ID_STRIDE + this.seq++);
+    for (;;) {
+      const code =
+        this.prefix + this.randSuffix(randomBytes(CODE_LEN - 1), 0);
+      if (!this.data.has(code)) return code;
+    }
   }
 
   /** Returns the short code, or null if the alias is taken. */
@@ -193,8 +212,10 @@ export class Store {
   shortenMany(urls: string[]): string[] {
     const now = Date.now();
     const codes = new Array<string>(urls.length);
+    const bytes = randomBytes(urls.length * (CODE_LEN - 1)); // one CSPRNG call
     for (let i = 0; i < urls.length; i++) {
-      const code = this.allocCode();
+      let code = this.prefix + this.randSuffix(bytes, i * (CODE_LEN - 1));
+      while (this.data.has(code)) code = this.allocCode();
       this.data.set(code, {
         u: urls[i],
         a: now,
@@ -210,14 +231,32 @@ export class Store {
     return codes;
   }
 
+  /** Tail the shard that owns `code`'s prefix (generated codes only). */
+  private tailOwner(code: string): void {
+    const owner = ALPHABET.indexOf(code[0]);
+    if (owner < 0 || owner === this.instance || !this.aof) return;
+    const name = `data-${owner}.log`;
+    let t = this.tails.get(name);
+    if (!t) {
+      t = TailReader.fromStart(join(this.dir, name));
+      this.tails.set(name, t);
+    }
+    t.readNew((o) => this.apply(o));
+  }
+
   /** Returns target url, or null for miss/expired. Counts a hit on success. */
   resolve(code: string): string | null {
     let e = this.data.get(code);
     if (!e) {
-      // maybe a sibling wrote it and we haven't tailed yet
+      // maybe a sibling wrote it and we haven't tailed yet: prefix targets
+      // the owning shard; lazyPoll catches aliases and anything else
       if (this.aof) {
-        this.lazyPoll();
+        this.tailOwner(code);
         e = this.data.get(code);
+        if (!e) {
+          this.lazyPoll();
+          e = this.data.get(code);
+        }
       }
       if (!e) return null;
     }

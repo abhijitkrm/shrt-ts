@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { rmSync } from "node:fs";
 import autocannon, { Request } from "autocannon";
-import { encode } from "../src/base62.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DURATION = Number(process.env.BENCH_DURATION ?? 5);
@@ -87,6 +86,21 @@ function report(name: string, res: any, rowsPerReq = 1): void {
   );
 }
 
+/** Create n aliased links via the API so the bench knows valid codes. */
+async function makeCodes(port: number, n: number): Promise<string[]> {
+  const codes = new Array<string>(n);
+  for (let i = 0; i < n; i++) {
+    codes[i] = `bk${i}`;
+    const res = await fetch(`http://127.0.0.1:${port}/api/shorten`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: `https://bench.example/${i}`, alias: codes[i] }),
+    });
+    if (!res.ok) throw new Error(`alias seed failed: ${res.status}`);
+  }
+  return codes;
+}
+
 const redirectReqs = (codes: string[]): Request[] =>
   codes.map((c) => ({ method: "GET", path: `/${c}` }) as Request);
 
@@ -125,17 +139,14 @@ async function main() {
     const env = envFor({ SERVER: "uws", SEED: String(KEYSPACE) }, "uws1");
     const port = Number(env.PORT);
     const srv = await startServer(env, [port]);
-    const codes = Array.from({ length: 100 }, (_, i) => encode(i + 1));
-    for (const c of codes) {
-      await fetch(`http://127.0.0.1:${port}/${c}`, { redirect: "manual" });
-    }
+    const codes = await makeCodes(port, 100);
     report("redirect (uws)", await cannon(port, redirectReqs(codes)));
     report(
       "redirect (uws, p10)",
       await cannon(port, redirectReqs(codes), { pipelining: 10 })
     );
     const reqs = redirectReqs(
-      Array.from({ length: 95 }, (_, i) => encode(1 + ((i * 613) % KEYSPACE)))
+      Array.from({ length: 95 }, (_, i) => codes[(i * 613) % codes.length])
     );
     for (let i = 0; i < 5; i++) reqs.push(writeReq);
     report("mixed 95/5 (uws)", await cannon(port, reqs));
@@ -149,10 +160,7 @@ async function main() {
     const env = envFor({ SERVER: "node", SEED: String(KEYSPACE) }, "node1");
     const port = Number(env.PORT);
     const srv = await startServer(env, [port]);
-    const codes = Array.from({ length: 100 }, (_, i) => encode(i + 1));
-    for (const c of codes) {
-      await fetch(`http://127.0.0.1:${port}/${c}`, { redirect: "manual" });
-    }
+    const codes = await makeCodes(port, 100);
     report("redirect (node w1)", await cannon(port, redirectReqs(codes)));
     report("shorten (node w1)", await cannon(port, [writeReq]));
     await stopServer(srv);
@@ -179,8 +187,14 @@ async function main() {
       `${"bulk x1000 (uws x4)".padEnd(24)} ${fmt(totalReqs).padStart(10)} req/s  ` +
         `${fmt(totalRows).padStart(10)} rows/s  (aggregate over ${ports.length} instances)`
     );
-    // aggregate redirect throughput
-    const codes = Array.from({ length: 100 }, (_, i) => encode(i + 1));
+    // aggregate redirect throughput: aliases created on port[0]; warm each
+    // port once so lazy tailing merges the rows before measurement
+    const codes = await makeCodes(ports[0], 100);
+    for (const p of ports) {
+      for (const c of codes) {
+        await fetch(`http://127.0.0.1:${p}/${c}`, { redirect: "manual" });
+      }
+    }
     const rresults = await Promise.all(
       ports.map((p) => cannon(p, redirectReqs(codes), { workers: 1 }))
     );
