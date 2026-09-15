@@ -128,49 +128,6 @@
     font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-2);
   }
 
-  /* ---------- ledger table ---------- */
-  .section-head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 6px; }
-  .section-head h2 { font-family: "Instrument Serif", serif; font-weight: 400; font-size: 34px; letter-spacing: -1px; }
-  .section-head .count { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--ink-2); }
-  .controls { margin-left: auto; display: flex; gap: 10px; }
-  .controls input, .controls select {
-    font: inherit; font-size: 13px; color: var(--ink);
-    background: #fff; border: 1px solid var(--line); border-radius: 10px;
-    padding: 10px 14px; outline: none;
-  }
-  .controls input:focus { border-color: var(--ink); }
-  .controls select { appearance: none; cursor: pointer; padding-right: 30px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%235c5849' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat; background-position: right 12px center;
-  }
-
-  table { width: 100%; border-collapse: collapse; }
-  thead th {
-    text-align: left; font-family: "JetBrains Mono", monospace; font-size: 10px;
-    letter-spacing: 2px; text-transform: uppercase; color: var(--ink-2);
-    font-weight: 500; padding: 16px 10px 10px; border-bottom: 1px solid var(--ink);
-  }
-  tbody tr { border-bottom: 1px solid var(--line); transition: background .15s; }
-  tbody tr:hover { background: var(--paper-2); }
-  td { padding: 15px 10px; font-size: 14px; vertical-align: middle; }
-  td.code a {
-    font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--ink);
-    text-decoration: none; border-bottom: 1.5px solid var(--accent); padding-bottom: 1px;
-  }
-  td.code a:hover { color: var(--accent); }
-  td.url { max-width: 330px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
-  td.num { font-family: "JetBrains Mono", monospace; font-size: 13px; font-variant-numeric: tabular-nums; }
-  td.acts { text-align: right; }
-  .icon-btn {
-    font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: var(--ink-2);
-    background: transparent; border: 1px solid var(--line); border-radius: 7px;
-    padding: 6px 12px; transition: .15s;
-  }
-  .icon-btn:hover { border-color: var(--ink); color: var(--ink); }
-  .icon-btn.ok { border-color: var(--accent); color: var(--accent); }
-  .empty { text-align: center; padding: 70px 0; color: var(--ink-2); }
-  .empty b { display: block; font-family: "Instrument Serif", serif; font-weight: 400; font-size: 26px; color: var(--ink); margin-bottom: 6px; }
-
   footer {
     margin-top: 80px; padding-top: 24px; border-top: 1px solid var(--line);
     display: flex; justify-content: space-between;
@@ -198,8 +155,6 @@
     .btn { padding: 16px; }
     .stats { grid-template-columns: 1fr 1fr; }
     .stat + .stat { padding-left: 18px; }
-    td.time, thead th.time { display: none; }
-    .controls input { width: 130px; }
   }
 </style>
 </head>
@@ -237,26 +192,6 @@
     <div class="stat"><div class="n">24<span style="font-size:.5em">h</span></div><div class="l">Link lifetime</div></div>
   </div>
 
-  <div class="section-head rev">
-    <h2>Ledger</h2>
-    <span class="count" id="count"></span>
-    <div class="controls">
-      <input id="search" type="search" placeholder="search…" />
-      <select id="sort">
-        <option value="created">newest</option>
-        <option value="hits">most hits</option>
-      </select>
-    </div>
-  </div>
-
-  <div class="rev">
-    <table>
-      <thead><tr><th>code</th><th>destination</th><th>hits</th><th class="time">created</th><th class="time">expires</th><th></th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <div class="empty" id="empty" hidden><b>No links yet</b>shorten one above — it self-destructs in 24 hours.</div>
-  </div>
-
   <footer>
     <span>shrt — aof + in-memory index</span>
     <span>uws · node · typescript</span>
@@ -268,10 +203,6 @@
 <script>
 const API = location.origin.startsWith("http") ? location.origin : "http://localhost:3000";
 const $ = (id) => document.getElementById(id);
-const state = { q: "", sort: "created" };
-let debounce;
-
-const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 function toast(msg, err) {
   const t = document.createElement("div");
@@ -289,41 +220,13 @@ async function api(path, opts) {
   return body;
 }
 
-const ago = (ms) => {
-  const s = (Date.now() - ms) / 1000;
-  if (s < 60) return Math.floor(s) + "s";
-  if (s < 3600) return Math.floor(s / 60) + "m";
-  if (s < 86400) return Math.floor(s / 3600) + "h";
-  return Math.floor(s / 86400) + "d";
-};
-const inHrs = (ms) => {
-  const s = ms - Date.now();
-  if (s <= 0) return "expired";
-  if (s < 3600000) return Math.floor(s / 60000) + "m";
-  return Math.floor(s / 3600000) + "h";
-};
 const fmtN = (n) => n.toLocaleString("en-US");
 
 async function load() {
   try {
-    const q = state.q ? "&q=" + encodeURIComponent(state.q) : "";
-    const { links, total } = await api(`/api/links?limit=100&sort=${state.sort}${q}`);
-    $("count").textContent = fmtN(total) + " indexed";
+    const { links, total } = await api("/api/links?limit=100&sort=hits");
     $("stLinks").textContent = fmtN(total);
     $("stHits").textContent = fmtN(links.reduce((a, l) => a + l.hits, 0));
-    $("empty").hidden = links.length > 0;
-    $("rows").innerHTML = links
-      .map(
-        (l) => `<tr>
-        <td class="code"><a href="/${esc(l.code)}" target="_blank" rel="noopener">/${esc(l.code)}</a></td>
-        <td class="url" title="${esc(l.url)}">${esc(l.url)}</td>
-        <td class="num">${fmtN(l.hits)}</td>
-        <td class="num time">${ago(l.created_at)}</td>
-        <td class="num time">${l.expires_at ? inHrs(l.expires_at) : "—"}</td>
-        <td class="acts"><button class="icon-btn" data-copy="${esc(l.code)}">copy</button></td>
-      </tr>`
-      )
-      .join("");
   } catch {
     // keep last good render
   }
@@ -365,16 +268,6 @@ async function copy(code, el) {
 }
 $("copyBtn").addEventListener("click", (e) =>
   copy($("shortUrl").textContent.replace(API + "/", ""), e.target));
-$("rows").addEventListener("click", (e) => {
-  const b = e.target.closest("button");
-  if (b?.dataset.copy) copy(b.dataset.copy, b);
-});
-
-$("search").addEventListener("input", (e) => {
-  clearTimeout(debounce);
-  debounce = setTimeout(() => { state.q = e.target.value.trim(); load(); }, 200);
-});
-$("sort").addEventListener("change", (e) => { state.sort = e.target.value; load(); });
 
 // scroll reveal
 const io = new IntersectionObserver(
