@@ -10,7 +10,8 @@
     "dev": "tsx src/index.ts",
     "test": "tsx --test test/*.test.ts",
     "bench": "pnpm build && tsx bench/bench.ts",
-    "smoke": "pnpm build && bash scripts/smoke.sh"
+    "smoke": "pnpm build && bash scripts/smoke.sh",
+    "flood": "bash scripts/flood.sh"
   },
   "keywords": [
     "url-shortener"
