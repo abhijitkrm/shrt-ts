@@ -27,6 +27,13 @@ test("health", async () => {
   assert.deepEqual(await res.json(), { ok: true });
 });
 
+test("GET / serves the UI when ui/index.html exists", async () => {
+  const res = await fetch(`${base}/`);
+  assert.equal(res.status, 200); // tests run from repo root where ui/ exists
+  assert.match(res.headers.get("content-type") ?? "", /text\/html/);
+  assert.match(await res.text(), /<title>shrt/);
+});
+
 test("shorten -> redirect -> stats flow", async () => {
   const res = await fetch(`${base}/api/shorten`, {
     method: "POST",

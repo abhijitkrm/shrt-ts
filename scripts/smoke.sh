@@ -65,6 +65,9 @@ echo "code=$TTL_CODE"
 sleep 0.05
 curl -s -o /dev/null -w "after ttl: %{http_code}\n" "$BASE/$TTL_CODE"
 
+echo "== GET / (UI) =="
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "$BASE/"
+
 echo "== 404 / 400 cases =="
 curl -s -o /dev/null -w "unknown code: %{http_code}\n" "$BASE/zzzz"
 curl -s -o /dev/null -w "bad url:      %{http_code}\n" -X POST "$BASE/api/shorten" \

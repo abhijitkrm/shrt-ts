@@ -38,7 +38,7 @@ function respond(res: uWS.HttpResponse, reply: Reply): void {
     res.end();
     return;
   }
-  res.writeHeader("content-type", "application/json");
+  res.writeHeader("content-type", reply.ctype ?? "application/json");
   res.end(reply.body);
 }
 

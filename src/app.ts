@@ -4,6 +4,8 @@ import {
   ServerResponse,
   Server,
 } from "node:http";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Store } from "./store.js";
 
 const CODE_RE = /^[0-9A-Za-z_-]{1,64}$/;
@@ -19,6 +21,20 @@ export interface Reply {
   status: number;
   location?: string;
   body?: string;
+  ctype?: string;
+}
+
+/** Optional single-page UI at GET / — read once, 404 when absent. */
+let uiCache: string | null | undefined;
+function uiHtml(): string | null {
+  if (uiCache === undefined) {
+    try {
+      uiCache = readFileSync(join(process.cwd(), "ui", "index.html"), "utf8");
+    } catch {
+      uiCache = null;
+    }
+  }
+  return uiCache;
 }
 
 function isValidUrl(raw: string): boolean {
@@ -111,6 +127,12 @@ export function handle(
 
   if (method === "GET") {
     if (pathname === "/api/health") return { status: 200, body: '{"ok":true}' };
+    if (pathname === "/") {
+      const html = uiHtml();
+      return html === null
+        ? { status: 404, body: '{"error":"not found"}' }
+        : { status: 200, body: html, ctype: "text/html; charset=utf-8" };
+    }
     if (pathname === "/api/links") {
       const p = new URLSearchParams(query);
       const limit = Math.min(
@@ -190,7 +212,7 @@ function send(res: ServerResponse, reply: Reply): void {
     "access-control-max-age": "86400",
   };
   if (reply.location !== undefined) headers.location = reply.location;
-  else headers["content-type"] = "application/json";
+  else headers["content-type"] = reply.ctype ?? "application/json";
   res.writeHead(reply.status, headers);
   res.end(reply.body);
 }

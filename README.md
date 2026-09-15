@@ -43,6 +43,7 @@ pnpm bench            # build + spawn real servers + autocannon scenarios
 | `PATCH` | `/api/links/{code}` | `{url?, ttl_ms?}` → `200`; `404` missing; `409` owned by another instance |
 | `DELETE` | `/api/links/{code}` | → `204`; `404` missing; `409` owned by another instance |
 | `OPTIONS` | any | `204` CORS preflight |
+| `GET` | `/` | single-file UI (`ui/index.html`) — 404 if absent |
 | `GET` | `/api/health` | `{ok: true}` |
 
 CORS: `Access-Control-Allow-Origin` on every response (`CORS_ORIGIN` env, default `*`).
@@ -198,6 +199,7 @@ src/store.ts    in-memory index + write-behind + multi-instance merge
 src/app.ts      transport-agnostic handle() + node:http adapter
 src/uws.ts      uWebSockets.js adapter (default server)
 src/index.ts    env config, cluster fan-out, seeding
-test/           node:test suites (23 tests)
+ui/index.html   single-file management UI served at GET / (no build step)
+test/           node:test suites
 bench/bench.ts  spawns real server processes, autocannon scenarios
 ```
