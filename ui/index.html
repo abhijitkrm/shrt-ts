@@ -79,7 +79,6 @@
   }
   .composer input::placeholder { color: #a29c88; }
   #url { flex: 1; font-size: 16px; }
-  #alias, #ttl { width: 130px; border-left: 1px solid var(--line); font-size: 14px; }
   .btn {
     font: inherit; font-weight: 600; font-size: 15px; cursor: pointer; border: 0;
     background: var(--ink); color: var(--paper); padding: 0 30px;
@@ -151,7 +150,6 @@
 
   @media (max-width: 720px) {
     .composer { flex-direction: column; }
-    #alias, #ttl { width: 100%; border-left: 0; border-top: 1px solid var(--line); }
     .btn { padding: 16px; }
     .stats { grid-template-columns: 1fr 1fr; }
     .stat + .stat { padding-left: 18px; }
@@ -167,15 +165,13 @@
   </nav>
 
   <div class="hero rev">
-    <div class="eyebrow">High-performance URL infrastructure</div>
+    <div class="eyebrow">High-performance URL shortener</div>
     <h1>Short links.<br /><em>Serious speed.</em></h1>
-    <p class="sub">In-memory index over an append-only log. Redirects in <code>~0.1&nbsp;ms</code>, durable in ≤5&nbsp;ms. Every link lives for exactly one day.</p>
+    <p class="sub">Every link lives for exactly one day.</p>
   </div>
 
   <form class="composer rev" id="form">
     <input id="url" type="url" placeholder="https://a-very-long-url.example/with?everything=on&it=1" required autocomplete="off" />
-    <input id="alias" type="text" placeholder="alias (opt)" maxlength="64" autocomplete="off" />
-    <input id="ttl" type="number" placeholder="ttl s ≤ 86400" min="1" max="86400" autocomplete="off" />
     <button class="btn" type="submit">Shorten</button>
   </form>
   <div class="hint rev">public links are immutable — created once, gone in 24 h</div>
@@ -235,22 +231,17 @@ async function load() {
 $("form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const url = $("url").value.trim();
-  const alias = $("alias").value.trim();
-  const ttlS = Number($("ttl").value);
-  const body = { url };
-  if (alias) body.alias = alias;
-  if (ttlS > 0) body.ttl_ms = Math.min(ttlS, 86400) * 1000;
   try {
     const { code } = await api("/api/shorten", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ url }),
     });
     const short = API + "/" + code;
     $("shortUrl").textContent = short;
     $("shortUrl").href = short;
     $("result").classList.add("show");
-    $("url").value = $("alias").value = $("ttl").value = "";
+    $("url").value = "";
     toast("created /" + code + " — expires in 24h");
     load();
   } catch (err) {
