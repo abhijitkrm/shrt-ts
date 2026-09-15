@@ -3,237 +3,264 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>shrt — links at light speed</title>
+<title>shrt — short links, serious speed</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg: #050508;
-    --panel: rgba(255,255,255,.035);
-    --panel-2: rgba(255,255,255,.06);
-    --line: rgba(255,255,255,.08);
-    --txt: #f2f2f5;
-    --dim: #8b8b98;
-    --a1: #7c5cff;
-    --a2: #00e0c7;
-    --a3: #ff5ca8;
-    --grad: linear-gradient(100deg, var(--a1), var(--a3) 55%, var(--a2));
-    --radius: 18px;
+    --paper: #f4f1ea;
+    --paper-2: #ede9df;
+    --ink: #16150f;
+    --ink-2: #5c5849;
+    --line: #d8d2c2;
+    --accent: #1e4d33;
+    --accent-soft: #e2ecdd;
+    --radius: 14px;
   }
   * { box-sizing: border-box; margin: 0; }
-  html { color-scheme: dark; }
+  html { color-scheme: light; }
   body {
     min-height: 100vh;
-    background: var(--bg);
-    color: var(--txt);
-    font-family: "Space Grotesk", system-ui, sans-serif;
-    overflow-x: hidden;
+    background:
+      radial-gradient(1200px 500px at 80% -10%, #ece7d8 0%, transparent 60%),
+      var(--paper);
+    color: var(--ink);
+    font-family: "Inter", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  /* --- aurora background --- */
-  .aurora { position: fixed; inset: 0; z-index: -2; overflow: hidden; }
-  .aurora i {
-    position: absolute; border-radius: 50%; filter: blur(90px); opacity: .5;
-    animation: drift 22s ease-in-out infinite alternate;
-  }
-  .aurora i:nth-child(1) { width: 55vw; height: 55vw; left: -12vw; top: -18vw; background: #3b2d8f; }
-  .aurora i:nth-child(2) { width: 40vw; height: 40vw; right: -8vw; top: 12vh; background: #7a1f5c; animation-delay: -8s; animation-duration: 26s; }
-  .aurora i:nth-child(3) { width: 38vw; height: 38vw; left: 30vw; bottom: -22vw; background: #063f3a; animation-delay: -14s; }
-  @keyframes drift {
-    from { transform: translate(0,0) scale(1); }
-    to   { transform: translate(6vw,-4vh) scale(1.15); }
-  }
-  .grain {
-    position: fixed; inset: 0; z-index: -1; opacity: .05; pointer-events: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
+  ::selection { background: var(--accent); color: var(--paper); }
 
-  .wrap { max-width: 1060px; margin: 0 auto; padding: 42px 22px 80px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px 90px; }
 
-  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 64px; }
-  .logo { font-weight: 700; font-size: 22px; letter-spacing: -.5px; }
-  .logo b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  /* ---------- nav ---------- */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 26px 0; border-bottom: 1px solid var(--line);
+  }
+  .logo { font-family: "Instrument Serif", serif; font-size: 30px; letter-spacing: -.5px; }
+  .logo i { font-style: italic; color: var(--accent); }
   .pill {
-    font-size: 12px; color: var(--dim); border: 1px solid var(--line);
-    padding: 6px 14px; border-radius: 999px; display: flex; gap: 8px; align-items: center;
+    display: flex; align-items: center; gap: 8px;
+    font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px;
   }
-  .pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--a2); box-shadow: 0 0 12px var(--a2); animation: pulse 2s infinite; }
-  @keyframes pulse { 50% { opacity: .35; } }
+  .pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 2.2s infinite; }
+  .pill.off i { background: #b3413a; }
+  @keyframes pulse { 50% { opacity: .3; } }
 
-  .hero { text-align: center; margin-bottom: 54px; }
+  /* ---------- hero ---------- */
+  .hero { padding: 84px 0 56px; }
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 3px;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 22px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .eyebrow::before { content: ""; width: 36px; height: 1px; background: var(--accent); }
   h1 {
-    font-size: clamp(44px, 7vw, 84px); font-weight: 700; line-height: 1.02;
-    letter-spacing: -3px; margin-bottom: 18px;
+    font-family: "Instrument Serif", serif; font-weight: 400;
+    font-size: clamp(52px, 8.4vw, 104px); line-height: .98; letter-spacing: -2.5px;
+    margin-bottom: 26px;
   }
-  h1 .g { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .sub { color: var(--dim); font-size: 17px; max-width: 480px; margin: 0 auto; }
-  .sub code { font-family: "JetBrains Mono", monospace; font-size: 14px; color: #b9b3ff; }
+  h1 em { font-style: italic; color: var(--accent); }
+  .sub { font-size: 17px; line-height: 1.6; color: var(--ink-2); max-width: 520px; }
+  .sub code { font-family: "JetBrains Mono", monospace; font-size: 14px; }
 
-  /* --- shortener card --- */
-  .card {
-    position: relative; border-radius: var(--radius);
-    background: var(--panel); border: 1px solid var(--line);
-    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-    padding: 10px; box-shadow: 0 30px 80px -30px rgba(0,0,0,.8);
+  /* ---------- composer ---------- */
+  .composer {
+    display: flex; align-items: stretch; border: 1px solid var(--ink);
+    border-radius: var(--radius); background: #fff; overflow: hidden;
+    box-shadow: 0 24px 60px -30px rgba(22,21,15,.35);
   }
-  .card::before {
-    content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1px;
-    background: linear-gradient(120deg, rgba(124,92,255,.5), transparent 30%, transparent 70%, rgba(0,224,199,.4));
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
+  .composer input {
+    font: inherit; border: 0; outline: none; background: transparent;
+    padding: 20px 18px; color: var(--ink); min-width: 0;
   }
-  .composer { display: flex; gap: 10px; }
-  input, select {
-    font: inherit; color: var(--txt); background: var(--panel-2);
-    border: 1px solid var(--line); border-radius: 12px;
-    padding: 14px 16px; outline: none; transition: border-color .2s, box-shadow .2s;
-  }
-  input:focus, select:focus { border-color: var(--a1); box-shadow: 0 0 0 3px rgba(124,92,255,.18); }
-  input::placeholder { color: #55555f; }
+  .composer input::placeholder { color: #a29c88; }
   #url { flex: 1; font-size: 16px; }
-  #alias { width: 150px; }
-  #ttl { width: 110px; }
-  select { appearance: none; cursor: pointer; }
+  #alias, #ttl { width: 130px; border-left: 1px solid var(--line); font-size: 14px; }
   .btn {
-    font: inherit; font-weight: 600; cursor: pointer; border: 0; color: #0b0714;
-    background: var(--grad); background-size: 160% 100%;
-    border-radius: 12px; padding: 0 26px; transition: background-position .4s, transform .15s, box-shadow .3s;
-    box-shadow: 0 8px 30px -8px rgba(124,92,255,.55);
-    white-space: nowrap;
+    font: inherit; font-weight: 600; font-size: 15px; cursor: pointer; border: 0;
+    background: var(--ink); color: var(--paper); padding: 0 30px;
+    letter-spacing: .2px; transition: background .2s, transform .12s;
   }
-  .btn:hover { background-position: 100% 0; transform: translateY(-1px); box-shadow: 0 12px 40px -8px rgba(255,92,168,.5); }
-  .btn:active { transform: translateY(0) scale(.98); }
+  .btn:hover { background: var(--accent); }
+  .btn:active { transform: scale(.98); }
 
-  /* --- result --- */
   #result {
-    display: none; margin-top: 14px; border-radius: 14px; padding: 16px 18px;
-    background: linear-gradient(120deg, rgba(124,92,255,.12), rgba(0,224,199,.08));
-    border: 1px solid rgba(124,92,255,.3);
-    align-items: center; gap: 14px;
-    animation: rise .35s cubic-bezier(.2,.9,.3,1.2);
+    display: none; margin-top: 14px; padding: 18px 22px;
+    border: 1px solid var(--accent); border-radius: var(--radius);
+    background: var(--accent-soft);
+    align-items: baseline; gap: 16px;
+    animation: rise .4s cubic-bezier(.2,.9,.3,1.15);
   }
   #result.show { display: flex; }
-  @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
   #shortUrl {
-    font-family: "JetBrains Mono", monospace; font-size: 19px; font-weight: 500;
-    background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
-    text-decoration: none;
+    font-family: "Instrument Serif", serif; font-size: 30px; letter-spacing: -.5px;
+    color: var(--ink); text-decoration: none; border-bottom: 2px solid var(--accent);
   }
-  #shortUrl:hover { filter: brightness(1.25); }
+  #shortUrl:hover { color: var(--accent); }
   .ghost {
-    font: inherit; font-size: 13px; cursor: pointer; color: var(--txt);
-    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
-    padding: 9px 14px; transition: .2s; margin-left: auto;
+    font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+    color: var(--ink); background: transparent; border: 1px solid var(--ink);
+    border-radius: 8px; padding: 8px 16px; margin-left: auto; transition: .2s;
   }
-  .ghost:hover { border-color: var(--a2); color: var(--a2); }
-  .ghost.ok { border-color: var(--a2); color: var(--a2); }
+  .ghost:hover { background: var(--ink); color: var(--paper); }
+  .ghost.ok { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+  .hint { font-size: 12px; color: var(--ink-2); margin-top: 10px; padding-left: 4px; }
 
-  /* --- toolbar + table --- */
-  .toolbar { display: flex; gap: 10px; margin: 46px 0 14px; align-items: center; }
-  .toolbar h2 { font-size: 15px; font-weight: 600; color: var(--dim); letter-spacing: 2px; text-transform: uppercase; }
-  .toolbar input { margin-left: auto; width: 240px; padding: 10px 14px; font-size: 14px; }
-  .toolbar select { padding: 10px 34px 10px 14px; font-size: 14px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238b8b98' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
+  /* ---------- stats ---------- */
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    margin: 64px 0 70px;
+  }
+  .stat { padding: 30px 8px 30px 0; }
+  .stat + .stat { border-left: 1px solid var(--line); padding-left: 28px; }
+  .stat .n {
+    font-family: "Instrument Serif", serif; font-size: clamp(34px, 4.6vw, 54px);
+    line-height: 1; letter-spacing: -1px; font-variant-numeric: tabular-nums;
+  }
+  .stat .l {
+    margin-top: 10px; font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-2);
+  }
+
+  /* ---------- ledger table ---------- */
+  .section-head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 6px; }
+  .section-head h2 { font-family: "Instrument Serif", serif; font-weight: 400; font-size: 34px; letter-spacing: -1px; }
+  .section-head .count { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--ink-2); }
+  .controls { margin-left: auto; display: flex; gap: 10px; }
+  .controls input, .controls select {
+    font: inherit; font-size: 13px; color: var(--ink);
+    background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; outline: none;
+  }
+  .controls input:focus { border-color: var(--ink); }
+  .controls select { appearance: none; cursor: pointer; padding-right: 30px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%235c5849' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 12px center;
   }
-  .count { font-size: 13px; color: var(--dim); font-family: "JetBrains Mono", monospace; }
 
   table { width: 100%; border-collapse: collapse; }
   thead th {
-    text-align: left; font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase;
-    color: var(--dim); font-weight: 600; padding: 12px 14px; border-bottom: 1px solid var(--line);
+    text-align: left; font-family: "JetBrains Mono", monospace; font-size: 10px;
+    letter-spacing: 2px; text-transform: uppercase; color: var(--ink-2);
+    font-weight: 500; padding: 16px 10px 10px; border-bottom: 1px solid var(--ink);
   }
-  tbody tr { border-bottom: 1px solid rgba(255,255,255,.045); transition: background .15s; }
-  tbody tr:hover { background: rgba(255,255,255,.03); }
-  td { padding: 13px 14px; font-size: 14px; vertical-align: middle; }
+  tbody tr { border-bottom: 1px solid var(--line); transition: background .15s; }
+  tbody tr:hover { background: var(--paper-2); }
+  td { padding: 15px 10px; font-size: 14px; vertical-align: middle; }
   td.code a {
-    font-family: "JetBrains Mono", monospace; color: #b9b3ff; text-decoration: none;
-    padding: 3px 8px; border-radius: 7px; background: rgba(124,92,255,.1);
-    border: 1px solid rgba(124,92,255,.22); transition: .2s;
+    font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--ink);
+    text-decoration: none; border-bottom: 1.5px solid var(--accent); padding-bottom: 1px;
   }
-  td.code a:hover { background: rgba(124,92,255,.25); }
-  td.url { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
-  td.hits { font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--a2); }
-  td.time { color: #55555f; font-size: 13px; white-space: nowrap; }
-  td.acts { text-align: right; white-space: nowrap; }
+  td.code a:hover { color: var(--accent); }
+  td.url { max-width: 330px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+  td.num { font-family: "JetBrains Mono", monospace; font-size: 13px; font-variant-numeric: tabular-nums; }
+  td.acts { text-align: right; }
   .icon-btn {
-    font: inherit; cursor: pointer; font-size: 12px; color: var(--dim);
-    background: transparent; border: 1px solid transparent; border-radius: 8px;
-    padding: 6px 10px; transition: .15s;
+    font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: var(--ink-2);
+    background: transparent; border: 1px solid var(--line); border-radius: 7px;
+    padding: 6px 12px; transition: .15s;
   }
-  .icon-btn:hover { color: var(--txt); border-color: var(--line); background: var(--panel-2); }
-  .icon-btn.danger:hover { color: var(--a3); border-color: rgba(255,92,168,.4); }
-  .icon-btn.arm { color: var(--a3); border-color: rgba(255,92,168,.4); }
-  .empty { text-align: center; padding: 60px 0; color: var(--dim); }
-  .empty b { display: block; font-size: 20px; color: var(--txt); margin-bottom: 6px; }
+  .icon-btn:hover { border-color: var(--ink); color: var(--ink); }
+  .icon-btn.ok { border-color: var(--accent); color: var(--accent); }
+  .empty { text-align: center; padding: 70px 0; color: var(--ink-2); }
+  .empty b { display: block; font-family: "Instrument Serif", serif; font-weight: 400; font-size: 26px; color: var(--ink); margin-bottom: 6px; }
 
-  /* --- toasts --- */
-  #toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
+  footer {
+    margin-top: 80px; padding-top: 24px; border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-2);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+
+  /* ---------- reveal + toasts ---------- */
+  .rev { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s cubic-bezier(.2,.8,.3,1); }
+  .rev.in { opacity: 1; transform: none; }
+  #toasts { position: fixed; right: 22px; bottom: 22px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
   .toast {
-    background: #14141c; border: 1px solid var(--line); border-left: 3px solid var(--a2);
-    border-radius: 10px; padding: 12px 18px; font-size: 14px;
+    background: var(--ink); color: var(--paper); border-radius: 10px;
+    padding: 13px 18px; font-size: 13px; letter-spacing: .2px;
     animation: toastIn .3s cubic-bezier(.2,.9,.3,1.2), toastOut .3s ease 2.6s forwards;
-    box-shadow: 0 10px 40px rgba(0,0,0,.5);
+    box-shadow: 0 14px 40px rgba(22,21,15,.3);
   }
-  .toast.err { border-left-color: var(--a3); }
-  @keyframes toastIn { from { opacity: 0; transform: translateX(20px); } }
-  @keyframes toastOut { to { opacity: 0; transform: translateX(20px); } }
+  .toast.err { background: #7a2e28; }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(14px); } }
+  @keyframes toastOut { to { opacity: 0; transform: translateY(14px); } }
 
-  @media (max-width: 640px) {
+  @media (max-width: 720px) {
     .composer { flex-direction: column; }
-    #alias, #ttl { width: 100%; }
-    .btn { padding: 14px; }
-    .toolbar input { width: 140px; }
-    td.time { display: none; }
+    #alias, #ttl { width: 100%; border-left: 0; border-top: 1px solid var(--line); }
+    .btn { padding: 16px; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .stat + .stat { padding-left: 18px; }
+    td.time, thead th.time { display: none; }
+    .controls input { width: 130px; }
   }
 </style>
 </head>
 <body>
-<div class="aurora"><i></i><i></i><i></i></div>
-<div class="grain"></div>
-
 <div class="wrap">
-  <header>
-    <div class="logo">shrt<b>.</b></div>
-    <div class="pill"><i></i><span id="health">connecting…</span></div>
-  </header>
 
-  <div class="hero">
-    <h1>Links,<br /><span class="g">at light speed.</span></h1>
-    <p class="sub">In-memory index, append-only durability, <code>~0.1&nbsp;ms</code> redirects. Paste a long URL — get a tiny one.</p>
+  <nav>
+    <div class="logo">shrt<i>.</i></div>
+    <div class="pill" id="healthPill"><i></i><span id="health">connecting</span></div>
+  </nav>
+
+  <div class="hero rev">
+    <div class="eyebrow">High-performance URL infrastructure</div>
+    <h1>Short links.<br /><em>Serious speed.</em></h1>
+    <p class="sub">In-memory index over an append-only log. Redirects in <code>~0.1&nbsp;ms</code>, durable in ≤5&nbsp;ms. Every link lives for exactly one day.</p>
   </div>
 
-  <div class="card">
-    <form class="composer" id="form">
-      <input id="url" type="url" placeholder="https://your-very-long-url.example/with?lots=of&params=1" required autocomplete="off" />
-      <input id="alias" type="text" placeholder="alias (opt)" maxlength="64" autocomplete="off" />
-      <input id="ttl" type="number" placeholder="ttl s ≤ 86400" min="1" max="86400" autocomplete="off" />
-      <button class="btn" type="submit">Shorten →</button>
-    </form>
-    <div id="result">
-      <a id="shortUrl" href="#" target="_blank" rel="noopener"></a>
-      <button class="ghost" id="copyBtn" type="button">copy</button>
+  <form class="composer rev" id="form">
+    <input id="url" type="url" placeholder="https://a-very-long-url.example/with?everything=on&it=1" required autocomplete="off" />
+    <input id="alias" type="text" placeholder="alias (opt)" maxlength="64" autocomplete="off" />
+    <input id="ttl" type="number" placeholder="ttl s ≤ 86400" min="1" max="86400" autocomplete="off" />
+    <button class="btn" type="submit">Shorten</button>
+  </form>
+  <div class="hint rev">public links are immutable — created once, gone in 24 h</div>
+
+  <div id="result">
+    <a id="shortUrl" href="#" target="_blank" rel="noopener"></a>
+    <button class="ghost" id="copyBtn" type="button">copy</button>
+  </div>
+
+  <div class="stats rev">
+    <div class="stat"><div class="n" id="stLinks">—</div><div class="l">Links indexed</div></div>
+    <div class="stat"><div class="n" id="stHits">—</div><div class="l">Redirects served</div></div>
+    <div class="stat"><div class="n">~0.1<span style="font-size:.5em">ms</span></div><div class="l">Avg redirect</div></div>
+    <div class="stat"><div class="n">24<span style="font-size:.5em">h</span></div><div class="l">Link lifetime</div></div>
+  </div>
+
+  <div class="section-head rev">
+    <h2>Ledger</h2>
+    <span class="count" id="count"></span>
+    <div class="controls">
+      <input id="search" type="search" placeholder="search…" />
+      <select id="sort">
+        <option value="created">newest</option>
+        <option value="hits">most hits</option>
+      </select>
     </div>
   </div>
 
-  <div class="toolbar">
-    <h2>Links</h2>
-    <span class="count" id="count"></span>
-    <input id="search" type="search" placeholder="search code or url…" />
-    <select id="sort">
-      <option value="created">newest</option>
-      <option value="hits">most hits</option>
-    </select>
-  </div>
-
-  <div class="card" style="padding: 4px 10px;">
+  <div class="rev">
     <table>
-      <thead><tr><th>code</th><th>destination</th><th>hits</th><th>created</th><th>expires</th><th></th></tr></thead>
+      <thead><tr><th>code</th><th>destination</th><th>hits</th><th class="time">created</th><th class="time">expires</th><th></th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div class="empty" id="empty" hidden><b>No links yet</b>shorten something above ↑</div>
+    <div class="empty" id="empty" hidden><b>No links yet</b>shorten one above — it self-destructs in 24 hours.</div>
   </div>
+
+  <footer>
+    <span>shrt — aof + in-memory index</span>
+    <span>uws · node · typescript</span>
+  </footer>
 </div>
 
 <div id="toasts"></div>
@@ -262,32 +289,44 @@ async function api(path, opts) {
   return body;
 }
 
-function ago(ms) {
+const ago = (ms) => {
   const s = (Date.now() - ms) / 1000;
-  if (s < 60) return Math.floor(s) + "s ago";
-  if (s < 3600) return Math.floor(s / 60) + "m ago";
-  if (s < 86400) return Math.floor(s / 3600) + "h ago";
-  return Math.floor(s / 86400) + "d ago";
-}
+  if (s < 60) return Math.floor(s) + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return Math.floor(s / 3600) + "h";
+  return Math.floor(s / 86400) + "d";
+};
+const inHrs = (ms) => {
+  const s = ms - Date.now();
+  if (s <= 0) return "expired";
+  if (s < 3600000) return Math.floor(s / 60000) + "m";
+  return Math.floor(s / 3600000) + "h";
+};
+const fmtN = (n) => n.toLocaleString("en-US");
 
 async function load() {
-  const q = state.q ? "&q=" + encodeURIComponent(state.q) : "";
-  const { links, total } = await api(`/api/links?limit=100&sort=${state.sort}${q}`);
-  $("count").textContent = total + " total";
-  $("empty").hidden = links.length > 0;
-  $("rows").innerHTML = links
-    .map(
-      (l) => `<tr>
-      <td class="code"><a href="/${esc(l.code)}" target="_blank" rel="noopener">/${esc(l.code)}</a></td>
-      <td class="url" title="${esc(l.url)}">${esc(l.url)}</td>
-      <td class="hits">${l.hits}</td>
-      <td class="time">${ago(l.created_at)}</td>
-      <td class="time">${l.expires_at ? "in " + Math.max(0, Math.round((l.expires_at - Date.now()) / 3600000)) + "h" : "—"}</td>
-      <td class="acts">
-        <button class="icon-btn" data-copy="${esc(l.code)}">copy</button>
-      </td></tr>`
-    )
-    .join("");
+  try {
+    const q = state.q ? "&q=" + encodeURIComponent(state.q) : "";
+    const { links, total } = await api(`/api/links?limit=100&sort=${state.sort}${q}`);
+    $("count").textContent = fmtN(total) + " indexed";
+    $("stLinks").textContent = fmtN(total);
+    $("stHits").textContent = fmtN(links.reduce((a, l) => a + l.hits, 0));
+    $("empty").hidden = links.length > 0;
+    $("rows").innerHTML = links
+      .map(
+        (l) => `<tr>
+        <td class="code"><a href="/${esc(l.code)}" target="_blank" rel="noopener">/${esc(l.code)}</a></td>
+        <td class="url" title="${esc(l.url)}">${esc(l.url)}</td>
+        <td class="num">${fmtN(l.hits)}</td>
+        <td class="num time">${ago(l.created_at)}</td>
+        <td class="num time">${l.expires_at ? inHrs(l.expires_at) : "—"}</td>
+        <td class="acts"><button class="icon-btn" data-copy="${esc(l.code)}">copy</button></td>
+      </tr>`
+      )
+      .join("");
+  } catch {
+    // keep last good render
+  }
 }
 
 $("form").addEventListener("submit", async (e) => {
@@ -297,7 +336,7 @@ $("form").addEventListener("submit", async (e) => {
   const ttlS = Number($("ttl").value);
   const body = { url };
   if (alias) body.alias = alias;
-  if (ttlS > 0) body.ttl_ms = ttlS * 1000;
+  if (ttlS > 0) body.ttl_ms = Math.min(ttlS, 86400) * 1000;
   try {
     const { code } = await api("/api/shorten", {
       method: "POST",
@@ -309,23 +348,23 @@ $("form").addEventListener("submit", async (e) => {
     $("shortUrl").href = short;
     $("result").classList.add("show");
     $("url").value = $("alias").value = $("ttl").value = "";
-    toast("shortened → /" + code);
+    toast("created /" + code + " — expires in 24h");
     load();
   } catch (err) {
     toast(err.message, true);
   }
 });
 
-async function copy(text, el) {
+async function copy(code, el) {
   try {
-    await navigator.clipboard.writeText(API + "/" + text);
-    el.textContent = "copied ✓";
+    await navigator.clipboard.writeText(API + "/" + code);
+    el.textContent = "copied";
     el.classList.add("ok");
     setTimeout(() => { el.textContent = "copy"; el.classList.remove("ok"); }, 1200);
   } catch { toast("copy failed", true); }
 }
-$("copyBtn").addEventListener("click", (e) => copy($("shortUrl").textContent.replace(API + "/", ""), e.target));
-
+$("copyBtn").addEventListener("click", (e) =>
+  copy($("shortUrl").textContent.replace(API + "/", ""), e.target));
 $("rows").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (b?.dataset.copy) copy(b.dataset.copy, b);
@@ -337,12 +376,20 @@ $("search").addEventListener("input", (e) => {
 });
 $("sort").addEventListener("change", (e) => { state.sort = e.target.value; load(); });
 
+// scroll reveal
+const io = new IntersectionObserver(
+  (es) => es.forEach((x) => x.isIntersecting && x.target.classList.add("in")),
+  { threshold: 0.08 }
+);
+document.querySelectorAll(".rev").forEach((el) => io.observe(el));
+
 (async () => {
   try {
     await api("/api/health");
     $("health").textContent = "api online";
   } catch {
     $("health").textContent = "api offline";
+    $("healthPill").classList.add("off");
   }
   load();
   setInterval(load, 15000);
