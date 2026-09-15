@@ -215,8 +215,9 @@ export class Store {
   }
 
   /** Bulk create; returns codes aligned with input order. */
-  shortenMany(urls: string[]): string[] {
+  shortenMany(urls: string[], ttlMs?: number): string[] {
     const now = Date.now();
+    const exp = ttlMs ? now + ttlMs : null;
     const codes = new Array<string>(urls.length);
     const bytes = randomBytes(urls.length * (CODE_LEN - 1)); // one CSPRNG call
     for (let i = 0; i < urls.length; i++) {
@@ -225,12 +226,12 @@ export class Store {
       this.data.set(code, {
         u: urls[i],
         a: now,
-        e: null,
+        e: exp,
         h: 0,
         oh: 0,
         i: this.instance,
       });
-      this.aof?.push(rowLine(code, esc(urls[i]), now, null, this.instance));
+      this.aof?.push(rowLine(code, esc(urls[i]), now, exp, this.instance));
       codes[i] = code;
     }
     if (this.aof && this.aof.pendingBytes > FLUSH_BYTES) this.aof.flush();

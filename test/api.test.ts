@@ -56,6 +56,36 @@ test("shorten -> redirect -> stats flow", async () => {
   assert.equal(body.hits, 1);
 });
 
+test("links default to 1-day ttl and are capped at 1 day", async () => {
+  const DAY = 86_400_000;
+  const res = await fetch(`${base}/api/shorten`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://ttl-default.example" }),
+  });
+  const { code } = await res.json();
+  const stats = await (await fetch(`${base}/api/stats/${code}`)).json();
+  assert.ok(Math.abs(stats.expires_at - (Date.now() + DAY)) < 5000);
+
+  const res2 = await fetch(`${base}/api/shorten`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://ttl-cap.example", ttl_ms: 365 * DAY }),
+  });
+  const { code: code2 } = await res2.json();
+  const stats2 = await (await fetch(`${base}/api/stats/${code2}`)).json();
+  assert.ok(Math.abs(stats2.expires_at - (Date.now() + DAY)) < 5000);
+
+  const res3 = await fetch(`${base}/api/shorten`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://ttl-short.example", ttl_ms: 5000 }),
+  });
+  const { code: code3 } = await res3.json();
+  const stats3 = await (await fetch(`${base}/api/stats/${code3}`)).json();
+  assert.ok(Math.abs(stats3.expires_at - (Date.now() + 5000)) < 5000);
+});
+
 test("custom alias", async () => {
   const res = await fetch(`${base}/api/shorten`, {
     method: "POST",

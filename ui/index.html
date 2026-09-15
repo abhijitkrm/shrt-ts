@@ -208,7 +208,7 @@
     <form class="composer" id="form">
       <input id="url" type="url" placeholder="https://your-very-long-url.example/with?lots=of&params=1" required autocomplete="off" />
       <input id="alias" type="text" placeholder="alias (opt)" maxlength="64" autocomplete="off" />
-      <input id="ttl" type="number" placeholder="ttl s (opt)" min="1" autocomplete="off" />
+      <input id="ttl" type="number" placeholder="ttl s ≤ 86400" min="1" max="86400" autocomplete="off" />
       <button class="btn" type="submit">Shorten →</button>
     </form>
     <div id="result">
@@ -229,7 +229,7 @@
 
   <div class="card" style="padding: 4px 10px;">
     <table>
-      <thead><tr><th>code</th><th>destination</th><th>hits</th><th>created</th><th></th></tr></thead>
+      <thead><tr><th>code</th><th>destination</th><th>hits</th><th>created</th><th>expires</th><th></th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
     <div class="empty" id="empty" hidden><b>No links yet</b>shorten something above ↑</div>
@@ -282,6 +282,7 @@ async function load() {
       <td class="url" title="${esc(l.url)}">${esc(l.url)}</td>
       <td class="hits">${l.hits}</td>
       <td class="time">${ago(l.created_at)}</td>
+      <td class="time">${l.expires_at ? "in " + Math.max(0, Math.round((l.expires_at - Date.now()) / 3600000)) + "h" : "—"}</td>
       <td class="acts">
         <button class="icon-btn" data-copy="${esc(l.code)}">copy</button>
       </td></tr>`

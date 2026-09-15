@@ -13,6 +13,8 @@ const MAX_BODY = 4096;
 const MAX_BULK_BODY = 1 << 20;
 const MAX_BULK_URLS = 10_000;
 const MAX_LIST_LIMIT = 1000;
+/** Links expire after at most this long; also the default TTL (1 day). */
+const LINK_TTL_MS = Number(process.env.LINK_TTL_MS ?? 86_400_000);
 
 /** Origin for Access-Control-Allow-Origin; "*" = any (dev default). */
 export const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "*";
@@ -82,7 +84,10 @@ function shortenOne(
   const code = store.shorten(
     parsed.url,
     parsed.alias as string | undefined,
-    parsed.ttl_ms as number | undefined
+    Math.min(
+      (parsed.ttl_ms as number | undefined) ?? LINK_TTL_MS,
+      LINK_TTL_MS
+    )
   );
   return code === null
     ? { status: 409, body: '{"error":"alias taken"}' }
@@ -106,7 +111,7 @@ function shortenBulk(store: Store, parsed: { urls?: unknown }): Reply {
   ) {
     return bad(`urls must be 1-${MAX_BULK_URLS} valid http(s) urls`);
   }
-  const codes = store.shortenMany(parsed.urls);
+  const codes = store.shortenMany(parsed.urls, LINK_TTL_MS);
   return { status: 201, body: JSON.stringify({ count: codes.length, codes }) };
 }
 
@@ -201,7 +206,9 @@ export function handle(
       const r = store.update(
         code,
         parsed.url,
-        parsed.ttl_ms as number | undefined
+        parsed.ttl_ms === undefined
+          ? undefined
+          : Math.min(parsed.ttl_ms as number, LINK_TTL_MS)
       );
       if (r === "ok") return { status: 200, body: '{"ok":true}' };
       return r === "missing"

@@ -35,7 +35,7 @@ pnpm bench            # build + spawn real servers + autocannon scenarios
 
 | Method | Path | Body / Response |
 |---|---|---|
-| `POST` | `/api/shorten` | `{url, alias?, ttl_ms?}` → `201 {code, short_url}`; `409` alias taken; `400` invalid |
+| `POST` | `/api/shorten` | `{url, alias?, ttl_ms?}` → `201 {code, short_url}`; `409` alias taken; `400` invalid. `ttl_ms` defaults to and is capped at `LINK_TTL_MS` (1 day) |
 | `POST` | `/api/shorten/bulk` | `{urls: […≤10000]}` → `201 {count, codes}` (body ≤1 MB, fast-path validation) |
 | `GET` | `/{code}` | `302` + `Location`; `404` unknown/expired |
 | `GET` | `/api/links` | `?limit(≤1000)&offset&sort=created\|hits&q=` → `{links, total}` (O(n) scan — admin path) |
@@ -71,6 +71,7 @@ Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 | `TAIL_MS` | `0` | >0 enables periodic sibling-log polling (on-miss always on) |
 | `CORS_ORIGIN` | `*` | value of `Access-Control-Allow-Origin` |
 | `ADMIN_TOKEN` | unset | enables PATCH/DELETE; requests need `x-admin-token: <value>` |
+| `LINK_TTL_MS` | `86400000` | default **and max** link lifetime — every link expires ≤1 day |
 
 ## Performance
 
