@@ -3,6 +3,7 @@ import { Store } from "./store.js";
 import { handle, Reply } from "./app.js";
 
 const MAX_BODY = 4096;
+const MAX_BULK_BODY = 1 << 20;
 
 const STATUS: Record<number, string> = {
   200: "200 OK",
@@ -37,17 +38,18 @@ export function createUwsApp(store: Store): uWS.TemplatedApp {
       res.onAborted(() => {
         done = true;
       });
+      const limit = path === "/api/shorten/bulk" ? MAX_BULK_BODY : MAX_BODY;
       res.onData((chunk, isLast) => {
         if (done) return;
         size += chunk.byteLength;
-        if (size > MAX_BODY) {
+        if (size > limit) {
           done = true;
           res.cork(() =>
             respond(res, { status: 413, body: '{"error":"body too large"}' })
           );
           return;
         }
-        chunks.push(Buffer.from(chunk));
+        chunks.push(Buffer.from(chunk.slice(0))); // copy: uWS reuses the ArrayBuffer
         if (isLast) {
           const raw =
             chunks.length === 1

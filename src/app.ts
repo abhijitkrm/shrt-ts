@@ -8,6 +8,8 @@ import { Store } from "./store.js";
 
 const CODE_RE = /^[0-9A-Za-z_-]{1,64}$/;
 const MAX_BODY = 4096;
+const MAX_BULK_BODY = 1 << 20;
+const MAX_BULK_URLS = 10_000;
 
 export interface Reply {
   status: number;
@@ -25,7 +27,61 @@ function isValidUrl(raw: string): boolean {
   }
 }
 
-/** Transport-agnostic request handler shared by node:http and Bun.serve. */
+function bad(error: string): Reply {
+  return { status: 400, body: `{"error":"${error}"}` };
+}
+
+function shortenOne(
+  store: Store,
+  parsed: { url?: unknown; alias?: unknown; ttl_ms?: unknown }
+): Reply {
+  if (typeof parsed.url !== "string" || !isValidUrl(parsed.url)) {
+    return bad("invalid url");
+  }
+  if (
+    parsed.alias !== undefined &&
+    (typeof parsed.alias !== "string" || !CODE_RE.test(parsed.alias))
+  ) {
+    return bad("invalid alias");
+  }
+  if (
+    parsed.ttl_ms !== undefined &&
+    (typeof parsed.ttl_ms !== "number" || parsed.ttl_ms <= 0)
+  ) {
+    return bad("invalid ttl_ms");
+  }
+  const code = store.shorten(
+    parsed.url,
+    parsed.alias as string | undefined,
+    parsed.ttl_ms as number | undefined
+  );
+  return code === null
+    ? { status: 409, body: '{"error":"alias taken"}' }
+    : { status: 201, body: JSON.stringify({ code, short_url: "/" + code }) };
+}
+
+// bulk fast-path: prefix + length + no chars that could break the log line
+const okBulkUrl = (u: unknown): u is string =>
+  typeof u === "string" &&
+  u.length <= 2048 &&
+  u.length > 7 &&
+  (u.startsWith("http://") || u.startsWith("https://")) &&
+  !/["\\\n\r]/.test(u);
+
+function shortenBulk(store: Store, parsed: { urls?: unknown }): Reply {
+  if (
+    !Array.isArray(parsed.urls) ||
+    parsed.urls.length === 0 ||
+    parsed.urls.length > MAX_BULK_URLS ||
+    !parsed.urls.every(okBulkUrl)
+  ) {
+    return bad(`urls must be 1-${MAX_BULK_URLS} valid http(s) urls`);
+  }
+  const codes = store.shortenMany(parsed.urls);
+  return { status: 201, body: JSON.stringify({ count: codes.length, codes }) };
+}
+
+/** Transport-agnostic request handler shared by node:http and uWS. */
 export function handle(
   store: Store,
   method: string,
@@ -47,36 +103,19 @@ export function handle(
       : { status: 302, location: target };
   }
 
-  if (method === "POST" && path === "/api/shorten") {
-    let parsed: { url?: unknown; alias?: unknown; ttl_ms?: unknown };
+  if (method === "POST") {
+    if (path !== "/api/shorten" && path !== "/api/shorten/bulk") {
+      return { status: 404, body: '{"error":"not found"}' };
+    }
+    let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(body ?? "");
     } catch {
-      return { status: 400, body: '{"error":"invalid json"}' };
+      return bad("invalid json");
     }
-    if (typeof parsed.url !== "string" || !isValidUrl(parsed.url)) {
-      return { status: 400, body: '{"error":"invalid url"}' };
-    }
-    if (
-      parsed.alias !== undefined &&
-      (typeof parsed.alias !== "string" || !CODE_RE.test(parsed.alias))
-    ) {
-      return { status: 400, body: '{"error":"invalid alias"}' };
-    }
-    if (
-      parsed.ttl_ms !== undefined &&
-      (typeof parsed.ttl_ms !== "number" || parsed.ttl_ms <= 0)
-    ) {
-      return { status: 400, body: '{"error":"invalid ttl_ms"}' };
-    }
-    const code = store.shorten(
-      parsed.url,
-      parsed.alias as string | undefined,
-      parsed.ttl_ms as number | undefined
-    );
-    return code === null
-      ? { status: 409, body: '{"error":"alias taken"}' }
-      : { status: 201, body: JSON.stringify({ code, short_url: "/" + code }) };
+    return path === "/api/shorten"
+      ? shortenOne(store, parsed)
+      : shortenBulk(store, parsed);
   }
 
   return { status: 404, body: '{"error":"not found"}' };
@@ -95,13 +134,14 @@ function send(res: ServerResponse, reply: Reply): void {
 function readBody(
   req: IncomingMessage,
   res: ServerResponse,
+  limit: number,
   cb: (raw: string) => void
 ): void {
   const chunks: Buffer[] = [];
   let size = 0;
   req.on("data", (c: Buffer) => {
     size += c.length;
-    if (size > MAX_BODY) {
+    if (size > limit) {
       res.writeHead(413);
       res.end();
       req.destroy();
@@ -110,7 +150,11 @@ function readBody(
     chunks.push(c);
   });
   req.on("end", () =>
-    cb(chunks.length === 1 ? chunks[0].toString() : Buffer.concat(chunks).toString())
+    cb(
+      chunks.length === 1
+        ? chunks[0].toString()
+        : Buffer.concat(chunks).toString()
+    )
   );
   req.on("error", () => res.destroy());
 }
@@ -120,7 +164,8 @@ export function createApp(store: Store): Server {
     const method = req.method ?? "GET";
     const path = req.url ?? "/";
     if (method === "POST") {
-      readBody(req, res, (raw) =>
+      const limit = path === "/api/shorten/bulk" ? MAX_BULK_BODY : MAX_BODY;
+      readBody(req, res, limit, (raw) =>
         send(res, handle(store, method, path, raw))
       );
     } else {

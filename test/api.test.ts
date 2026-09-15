@@ -99,6 +99,32 @@ test("404 for unknown code and bad paths", async () => {
   assert.equal((await fetch(`${base}/a/b/c`)).status, 404);
 });
 
+test("bulk shorten", async () => {
+  const urls = Array.from({ length: 50 }, (_, i) => `https://bulk.example/${i}`);
+  const res = await fetch(`${base}/api/shorten/bulk`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ urls }),
+  });
+  assert.equal(res.status, 201);
+  const { count, codes } = await res.json();
+  assert.equal(count, 50);
+  assert.equal(new Set(codes).size, 50);
+  const redir = await fetch(`${base}/${codes[10]}`, { redirect: "manual" });
+  assert.equal(redir.headers.get("location"), urls[10]);
+});
+
+test("bulk rejects bad input", async () => {
+  for (const urls of [[], ["ftp://x"], ["https://ok.com", "nope"], "notarray"]) {
+    const res = await fetch(`${base}/api/shorten/bulk`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ urls }),
+    });
+    assert.equal(res.status, 400, JSON.stringify(urls));
+  }
+});
+
 test("rejects oversized body", async () => {
   const res = await fetch(`${base}/api/shorten`, {
     method: "POST",

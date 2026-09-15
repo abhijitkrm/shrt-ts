@@ -16,11 +16,9 @@
   ],
   "license": "ISC",
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.51.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.0",
     "autocannon": "^8.0.0",
     "tsx": "^4.19.4",

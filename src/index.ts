@@ -5,39 +5,28 @@ import { createApp } from "./app.js";
 import { createUwsApp } from "./uws.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const DB_PATH = process.env.DB_PATH ?? "urls.db";
-const CACHE_MAX = Number(process.env.CACHE_MAX ?? 10_000);
+const DATA_DIR = process.env.DATA_DIR ?? "data";
 const WORKERS = Number(process.env.WORKERS ?? 1);
 const SEED = Number(process.env.SEED ?? 0);
 const SERVER = process.env.SERVER ?? "uws";
 const PORT_OFFSET = Number(process.env.PORT_OFFSET ?? 0);
+const INSTANCE = process.env.INSTANCE;
 
-function seed(path: string, n: number): void {
-  const s = new Store(path, 0);
+function seed(): void {
+  const s = new Store(DATA_DIR);
   if (s.isEmpty()) {
-    const urls = new Array<string>(n);
-    for (let i = 0; i < n; i++) urls[i] = `https://example.com/${i}`;
+    const urls = new Array<string>(SEED);
+    for (let i = 0; i < SEED; i++) urls[i] = `https://example.com/${i}`;
     s.seed(urls);
   }
   s.close();
 }
 
-function openStore(): Store {
-  return new Store(DB_PATH, CACHE_MAX);
-}
-
-function shutdown(store: Store, closeServer?: () => void): void {
-  const fn = () => {
-    closeServer?.();
-    store.close();
-    process.exit(0);
-  };
-  process.on("SIGINT", fn);
-  process.on("SIGTERM", fn);
-}
-
 function serve(): void {
-  const store = openStore();
+  const store = new Store(
+    DATA_DIR,
+    INSTANCE !== undefined ? Number(INSTANCE) : undefined
+  );
   if (SERVER === "uws") {
     const port = PORT + PORT_OFFSET; // uWS can't share a port across processes
     const app = createUwsApp(store);
@@ -59,13 +48,23 @@ function serve(): void {
   shutdown(store, () => server.close());
 }
 
+function shutdown(store: Store, closeServer?: () => void): void {
+  const fn = () => {
+    closeServer?.();
+    store.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", fn);
+  process.on("SIGTERM", fn);
+}
+
 if (WORKERS > 1 && cluster.isPrimary) {
-  if (SEED) seed(DB_PATH, SEED);
-  // uWS workers can't share a socket: each gets PORT+i via PORT_OFFSET
+  if (SEED) seed();
+  // uWS workers can't share a socket: each binds PORT+i via PORT_OFFSET
   for (let i = 0; i < (WORKERS || availableParallelism()); i++) {
     cluster.fork({ PORT_OFFSET: i });
   }
 } else {
-  if (SEED) seed(DB_PATH, SEED);
+  if (SEED) seed();
   serve();
 }

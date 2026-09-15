@@ -1,4 +1,12 @@
-import Database from "better-sqlite3";
+import { join } from "node:path";
+import { writeFileSync, renameSync } from "node:fs";
+import {
+  Aof,
+  replayFile,
+  TailReader,
+  claimInstance,
+  shardFiles,
+} from "./aof.js";
 import { encode } from "./base62.js";
 
 export interface Link {
@@ -9,150 +17,281 @@ export interface Link {
   expires_at: number | null;
 }
 
-interface CachedEntry {
-  url: string;
-  exp: number | null;
+interface Entry {
+  u: string;
+  a: number;
+  e: number | null;
+  h: number; // total hits (own + remote deltas seen)
+  oh: number; // own hits only (what snapshots persist)
+  i: number;
 }
 
+const FLUSH_MS = 5;
+const FSYNC_MS = 500;
+const TAIL_MS = Number(process.env.TAIL_MS ?? 0); // 0 = lazy on-miss only
+const TAIL_MIN_INTERVAL = 200;
+const FLUSH_BYTES = 256 << 10;
+const ID_STRIDE = 1 << 32; // instance * 2^32 + seq -> globally unique code space
+const SNAP_BYTES = 64 << 20;
+const MAX_STRAY_HITS = 10_000;
+const TRACK_HITS = process.env.HITS !== "0";
+
+const noop = () => {};
+
+/** Escaped url for inline log serialization (quotes/backslashes/newlines). */
+const esc = (u: string) => JSON.stringify(u).slice(1, -1);
+
+const rowLine = (
+  c: string,
+  eu: string,
+  a: number,
+  e: number | null,
+  i: number,
+  n = 0
+) => `{"c":"${c}","u":"${eu}","a":${a},"e":${e},"i":${i},"n":${n}}`;
+
+/**
+ * In-memory KV + append-only-log persistence.
+ * - reads: pure Map.get (no disk, no SQL)
+ * - writes: map.set + buffered append; fsync batch every FLUSH_MS (<=5ms loss window)
+ * - multi-instance: per-instance log shards (data-<i>.log), siblings tailed
+ *   every TAIL_MS -> ~250ms cross-instance convergence, disjoint code space
+ */
 export class Store {
-  private db: Database.Database;
-  private cache = new Map<string, CachedEntry | null>();
+  private data = new Map<string, Entry>();
   private pendingHits = new Map<string, number>();
+  private strayHits = new Map<string, { t: number; o: number }>();
+  private aof: Aof | null = null;
+  private instance = 0;
+  private release: () => void = noop;
+  private seq = 1;
+  private dir = "";
+  private ownName = "";
+  private tails = new Map<string, TailReader>();
   private flushTimer: NodeJS.Timeout;
-  private maxCache: number;
+  private syncTimer: NodeJS.Timeout | null = null;
+  private tailTimer: NodeJS.Timeout | null = null;
 
-  private stmtInsert: Database.Statement;
-  private stmtInsertAlias: Database.Statement;
-  private stmtSetCode: Database.Statement;
-  private stmtGetByCode: Database.Statement;
-  private stmtBump: Database.Statement;
-  private stmtStats: Database.Statement;
-  private createGenerated: (
-    url: string,
-    now: number,
-    exp: number | null
-  ) => string;
-
-  constructor(path: string, maxCache = 10_000) {
-    this.maxCache = maxCache;
-    this.db = new Database(path);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = NORMAL");
-    this.db.pragma("busy_timeout = 3000");
-    this.db.exec(`CREATE TABLE IF NOT EXISTS links (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      code TEXT UNIQUE,
-      url TEXT NOT NULL,
-      hits INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER
-    )`);
-    this.stmtInsert = this.db.prepare(
-      "INSERT INTO links (url, created_at, expires_at) VALUES (?, ?, ?)"
-    );
-    this.stmtInsertAlias = this.db.prepare(
-      "INSERT INTO links (code, url, created_at, expires_at) VALUES (?, ?, ?, ?)"
-    );
-    this.stmtSetCode = this.db.prepare("UPDATE links SET code = ? WHERE id = ?");
-    this.stmtGetByCode = this.db.prepare(
-      "SELECT url, expires_at FROM links WHERE code = ?"
-    );
-    this.stmtBump = this.db.prepare(
-      "UPDATE links SET hits = hits + ? WHERE code = ?"
-    );
-    this.stmtStats = this.db.prepare(
-      "SELECT code, url, hits, created_at, expires_at FROM links WHERE code = ?"
-    );
-    this.createGenerated = this.db.transaction(
-      (url: string, now: number, exp: number | null): string => {
-        const { lastInsertRowid } = this.stmtInsert.run(url, now, exp);
-        const code = encode(Number(lastInsertRowid));
-        this.stmtSetCode.run(code, lastInsertRowid);
-        return code;
+  constructor(dir: string, instance?: number) {
+    if (dir !== ":memory:") {
+      const claim =
+        instance !== undefined
+          ? { id: instance, release: noop }
+          : claimInstance(dir);
+      this.instance = claim.id;
+      this.release = claim.release;
+      this.dir = dir;
+      this.ownName = `data-${this.instance}.log`;
+      this.aof = new Aof(dir, this.ownName);
+      this.loadAll();
+      if (TAIL_MS > 0) {
+        this.tailTimer = setInterval(() => this.pollTails(), TAIL_MS);
+        this.tailTimer.unref();
       }
-    );
-    this.flushTimer = setInterval(() => this.flushHits(), 5_000);
+      this.syncTimer = setInterval(() => this.aof?.sync(), FSYNC_MS);
+      this.syncTimer.unref();
+    }
+    this.flushTimer = setInterval(() => this.flush(), FLUSH_MS);
     this.flushTimer.unref();
+  }
+
+  private apply(o: {
+    c?: string;
+    u?: string;
+    a?: number;
+    e?: number | null;
+    i?: number;
+    n?: number;
+    h?: string;
+    d?: number;
+  }): void {
+    if (o.h !== undefined) {
+      const d = o.d ?? 0;
+      const own = o.i === this.instance;
+      const e = this.data.get(o.h);
+      if (e) {
+        e.h += d;
+        if (own) e.oh += d;
+      } else {
+        if (this.strayHits.size >= MAX_STRAY_HITS) {
+          const k = this.strayHits.keys().next().value;
+          if (k !== undefined) this.strayHits.delete(k);
+        }
+        const s = this.strayHits.get(o.h) ?? { t: 0, o: 0 };
+        s.t += d;
+        if (own) s.o += d;
+        this.strayHits.set(o.h, s);
+      }
+      return;
+    }
+    if (o.c === undefined || o.u === undefined) return;
+    const stray = this.strayHits.get(o.c) ?? { t: 0, o: 0 };
+    const entry: Entry = {
+      u: o.u,
+      a: o.a ?? 0,
+      e: o.e ?? null,
+      h: (o.n ?? 0) + stray.t,
+      oh: (o.n ?? 0) + stray.o,
+      i: o.i ?? -1,
+    };
+    this.strayHits.delete(o.c);
+    this.data.set(o.c, entry);
+    if (o.i === this.instance) this.seq++;
+  }
+
+  /** Replay snapshot + own log + all sibling logs present at boot. */
+  private loadAll(): void {
+    replayFile(join(this.dir, `data-${this.instance}.snap`), (o) =>
+      this.apply(o)
+    );
+    replayFile(join(this.dir, this.ownName), (o) => this.apply(o));
+    for (const f of shardFiles(this.dir, this.ownName)) {
+      const snap = f.replace(/\.log$/, ".snap");
+      replayFile(join(this.dir, snap), (o) => this.apply(o));
+      const tail = TailReader.fromStart(join(this.dir, f));
+      this.tails.set(f, tail);
+    }
+  }
+
+  private lastPoll = 0;
+
+  /** Pull newly appended lines from sibling logs (and discover new shards). */
+  pollTails(): void {
+    if (!this.aof) return;
+    for (const f of shardFiles(this.dir, this.ownName)) {
+      if (!this.tails.has(f)) {
+        this.tails.set(f, TailReader.fromStart(join(this.dir, f)));
+      }
+    }
+    for (const t of this.tails.values()) t.readNew((o) => this.apply(o));
+    this.lastPoll = Date.now();
+  }
+
+  /** Rate-limited tail poll used on read-miss (bounds scan frequency). */
+  private lazyPoll(): void {
+    if (Date.now() - this.lastPoll < TAIL_MIN_INTERVAL) return;
+    this.pollTails();
+  }
+
+  private allocCode(): string {
+    return encode(this.instance * ID_STRIDE + this.seq++);
   }
 
   /** Returns the short code, or null if the alias is taken. */
   shorten(url: string, alias?: string, ttlMs?: number): string | null {
     const now = Date.now();
     const exp = ttlMs ? now + ttlMs : null;
-    if (alias !== undefined) {
-      try {
-        this.stmtInsertAlias.run(alias, url, now, exp);
-      } catch {
-        return null;
-      }
-      this.cacheSet(alias, { url, exp });
-      return alias;
-    }
-    const code = this.createGenerated(url, now, exp);
-    this.cacheSet(code, { url, exp });
+    const code = alias ?? this.allocCode();
+    if (alias !== undefined && this.data.has(alias)) return null;
+    this.data.set(code, { u: url, a: now, e: exp, h: 0, oh: 0, i: this.instance });
+    this.aof?.push(rowLine(code, esc(url), now, exp, this.instance));
+    if (this.aof && this.aof.pendingBytes > FLUSH_BYTES) this.aof.flush();
     return code;
+  }
+
+  /** Bulk create; returns codes aligned with input order. */
+  shortenMany(urls: string[]): string[] {
+    const now = Date.now();
+    const codes = new Array<string>(urls.length);
+    for (let i = 0; i < urls.length; i++) {
+      const code = this.allocCode();
+      this.data.set(code, {
+        u: urls[i],
+        a: now,
+        e: null,
+        h: 0,
+        oh: 0,
+        i: this.instance,
+      });
+      this.aof?.push(rowLine(code, esc(urls[i]), now, null, this.instance));
+      codes[i] = code;
+    }
+    if (this.aof && this.aof.pendingBytes > FLUSH_BYTES) this.aof.flush();
+    return codes;
   }
 
   /** Returns target url, or null for miss/expired. Counts a hit on success. */
   resolve(code: string): string | null {
-    let entry = this.cache.get(code);
-    if (entry === undefined) {
-      const row = this.stmtGetByCode.get(code) as
-        | { url: string; expires_at: number | null }
-        | undefined;
-      entry = row ? { url: row.url, exp: row.expires_at } : null;
-      this.cacheSet(code, entry);
+    let e = this.data.get(code);
+    if (!e) {
+      // maybe a sibling wrote it and we haven't tailed yet
+      if (this.aof) {
+        this.lazyPoll();
+        e = this.data.get(code);
+      }
+      if (!e) return null;
     }
-    if (entry === null) return null;
-    if (entry.exp !== null && entry.exp <= Date.now()) return null;
-    this.pendingHits.set(code, (this.pendingHits.get(code) ?? 0) + 1);
-    return entry.url;
+    if (e.e !== null && e.e <= Date.now()) return null;
+    if (TRACK_HITS) {
+      e.h++;
+      e.oh++;
+      this.pendingHits.set(code, (this.pendingHits.get(code) ?? 0) + 1);
+    }
+    return e.u;
   }
 
   isEmpty(): boolean {
-    return this.db.prepare("SELECT 1 FROM links LIMIT 1").get() === undefined;
+    return this.data.size === 0;
   }
 
   stats(code: string): Link | null {
-    const row = this.stmtStats.get(code) as Link | undefined;
-    if (!row) return null;
-    return { ...row, hits: row.hits + (this.pendingHits.get(code) ?? 0) };
+    const e = this.data.get(code);
+    if (!e) return null;
+    return {
+      code,
+      url: e.u,
+      hits: e.h,
+      created_at: e.a,
+      expires_at: e.e,
+    };
   }
 
-  /** Bulk-insert urls; rows get codes from their rowids. Returns count. */
+  /** Bulk-insert urls through the normal write path. Returns count. */
   seed(urls: string[]): number {
-    const now = Date.now();
-    const tx = this.db.transaction((list: string[]) => {
-      for (const u of list) {
-        const { lastInsertRowid } = this.stmtInsert.run(u, now, null);
-        this.stmtSetCode.run(encode(Number(lastInsertRowid)), lastInsertRowid);
-      }
-    });
-    tx(urls);
+    this.shortenMany(urls);
+    this.flush();
     return urls.length;
   }
 
-  private cacheSet(code: string, entry: CachedEntry | null): void {
-    if (this.maxCache <= 0) return;
-    if (this.cache.size >= this.maxCache) {
-      const oldest = this.cache.keys().next().value;
-      if (oldest !== undefined) this.cache.delete(oldest);
+  /** Persist hit deltas + all queued rows; one write + fsync. */
+  flush(): void {
+    if (this.pendingHits.size > 0 && this.aof) {
+      for (const [code, d] of this.pendingHits) {
+        this.aof.push(`{"h":"${code}","d":${d},"i":${this.instance}}`);
+      }
     }
-    this.cache.set(code, entry);
+    this.pendingHits.clear();
+    this.aof?.flush();
   }
 
-  flushHits(): void {
-    if (this.pendingHits.size === 0) return;
-    const tx = this.db.transaction((hits: Map<string, number>) => {
-      for (const [code, n] of hits) this.stmtBump.run(n, code);
-    });
-    tx(this.pendingHits);
-    this.pendingHits.clear();
+  /** Rewrite own rows as a compact snapshot, then truncate own log. */
+  compact(): void {
+    if (!this.aof) return;
+    this.flush();
+    const snapPath = join(this.dir, `data-${this.instance}.snap`);
+    const chunks: Buffer[] = [];
+    for (const [code, e] of this.data) {
+      if (e.i === this.instance) {
+        chunks.push(
+          Buffer.from(rowLine(code, esc(e.u), e.a, e.e, e.i, e.oh) + "\n")
+        );
+      }
+    }
+    const tmp = snapPath + ".tmp";
+    writeFileSync(tmp, Buffer.concat(chunks));
+    renameSync(tmp, snapPath);
+    this.aof.truncate();
   }
 
   close(): void {
     clearInterval(this.flushTimer);
-    this.flushHits();
-    this.db.close();
+    if (this.syncTimer) clearInterval(this.syncTimer);
+    if (this.tailTimer) clearInterval(this.tailTimer);
+    for (const t of this.tails.values()) t.close();
+    this.tails.clear();
+    this.flush();
+    this.aof?.sync();
+    this.aof?.close();
+    this.release();
   }
 }
