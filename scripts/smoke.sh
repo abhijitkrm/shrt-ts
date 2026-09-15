@@ -43,20 +43,14 @@ curl -s "$BASE/api/stats/$CODE"; echo
 echo "== GET /api/links (UI list, sort=hits) =="
 curl -s "$BASE/api/links?limit=3&sort=hits"; echo
 
-echo "== PATCH /api/links/{code} (update url) =="
-curl -s -X PATCH "$BASE/api/links/$CODE" -H 'content-type: application/json' \
-  -d '{"url":"https://devin.ai/updated"}'; echo
-curl -s -o /dev/null -w "redirect now -> %{redirect_url}\n" "$BASE/$CODE"
+echo "== PATCH/DELETE public -> 404 (immutable links) =="
+curl -s -o /dev/null -w "patch:  %{http_code}\n" -X PATCH "$BASE/api/links/$CODE" \
+  -H 'content-type: application/json' -d '{"url":"https://x.example"}'
+curl -s -o /dev/null -w "delete: %{http_code}\n" -X DELETE "$BASE/api/links/$CODE"
 
 echo "== OPTIONS preflight (CORS) =="
 curl -s -o /dev/null -w "%{http_code} allow-origin: %header{access-control-allow-origin}\n" \
   -X OPTIONS "$BASE/api/shorten"
-
-echo "== DELETE /api/links/{code} =="
-DEL=$(curl -s -X POST "$BASE/api/shorten" -H 'content-type: application/json' \
-  -d '{"url":"https://gone.example","alias":"delme"}' | sed -E 's/.*"code":"([^"]+)".*/\1/')
-curl -s -o /dev/null -w "delete delme: %{http_code}\n" -X DELETE "$BASE/api/links/$DEL"
-curl -s -o /dev/null -w "after delete: %{http_code}\n" "$BASE/delme"
 
 echo "== ttl_ms=1 link -> expires =="
 TTL_CODE=$(curl -s -X POST "$BASE/api/shorten" -H 'content-type: application/json' \

@@ -17,6 +17,15 @@ const MAX_LIST_LIMIT = 1000;
 /** Origin for Access-Control-Allow-Origin; "*" = any (dev default). */
 export const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "*";
 
+/**
+ * Links are immutable for the public API. PATCH/DELETE exist only when
+ * ADMIN_TOKEN is set, and require the x-admin-token header (abuse takedowns).
+ */
+function adminOk(token?: string): boolean {
+  const t = process.env.ADMIN_TOKEN;
+  return !!t && token === t;
+}
+
 export interface Reply {
   status: number;
   location?: string;
@@ -117,7 +126,8 @@ export function handle(
   store: Store,
   method: string,
   path: string,
-  body?: string
+  body?: string,
+  adminToken?: string
 ): Reply {
   const q = path.indexOf("?");
   const pathname = q < 0 ? path : path.slice(0, q);
@@ -170,7 +180,7 @@ export function handle(
   }
 
   if (method === "PATCH" || method === "DELETE") {
-    if (!pathname.startsWith("/api/links/")) {
+    if (!pathname.startsWith("/api/links/") || !adminOk(adminToken)) {
       return { status: 404, body: '{"error":"not found"}' };
     }
     const code = pathname.slice(11);
@@ -249,14 +259,16 @@ export function createApp(store: Store): Server {
   return createServer((req, res) => {
     const method = req.method ?? "GET";
     const path = req.url ?? "/";
+    const token = req.headers["x-admin-token"];
+    const admin = Array.isArray(token) ? token[0] : token;
     if (method === "POST" || method === "PATCH") {
       const pathname = path.split("?", 1)[0];
       const limit = pathname === "/api/shorten/bulk" ? MAX_BULK_BODY : MAX_BODY;
       readBody(req, res, limit, (raw) =>
-        send(res, handle(store, method, path, raw))
+        send(res, handle(store, method, path, raw, admin))
       );
     } else {
-      send(res, handle(store, method, path));
+      send(res, handle(store, method, path, undefined, admin));
     }
   });
 }

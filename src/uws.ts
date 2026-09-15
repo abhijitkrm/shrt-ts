@@ -48,6 +48,7 @@ export function createUwsApp(store: Store): uWS.TemplatedApp {
     const url = req.getUrl();
     const qs = req.getQuery();
     const path = qs ? `${url}?${qs}` : url;
+    const admin = req.getHeader("x-admin-token") || undefined;
     if (method === "POST" || method === "PATCH") {
       const chunks: Buffer[] = [];
       let size = 0;
@@ -72,11 +73,13 @@ export function createUwsApp(store: Store): uWS.TemplatedApp {
             chunks.length === 1
               ? chunks[0].toString()
               : Buffer.concat(chunks).toString();
-          res.cork(() => respond(res, handle(store, method, path, raw)));
+          res.cork(() =>
+            respond(res, handle(store, method, path, raw, admin))
+          );
         }
       });
       return;
     }
-    respond(res, handle(store, method, path));
+    respond(res, handle(store, method, path, undefined, admin));
   });
 }

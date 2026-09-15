@@ -40,17 +40,19 @@ pnpm bench            # build + spawn real servers + autocannon scenarios
 | `GET` | `/{code}` | `302` + `Location`; `404` unknown/expired |
 | `GET` | `/api/links` | `?limit(≤1000)&offset&sort=created\|hits&q=` → `{links, total}` (O(n) scan — admin path) |
 | `GET` | `/api/stats/{code}` | `{code, url, hits, created_at, expires_at}` |
-| `PATCH` | `/api/links/{code}` | `{url?, ttl_ms?}` → `200`; `404` missing; `409` owned by another instance |
-| `DELETE` | `/api/links/{code}` | → `204`; `404` missing; `409` owned by another instance |
+| `PATCH` | `/api/links/{code}` | admin only: `{url?, ttl_ms?}` → `200`; `404` missing/not-authorized; `409` remote-owned |
+| `DELETE` | `/api/links/{code}` | admin only → `204`; `404` missing/not-authorized; `409` remote-owned |
 | `OPTIONS` | any | `204` CORS preflight |
 | `GET` | `/` | single-file UI (`ui/index.html`) — 404 if absent |
 | `GET` | `/api/health` | `{ok: true}` |
 
 CORS: `Access-Control-Allow-Origin` on every response (`CORS_ORIGIN` env, default `*`).
 
-`PATCH`/`DELETE` are durable only on the instance that owns the code (mutations
-are ordered within the owner's log). `409` means route the request to the owning
-instance — for generated codes that's `ALPHABET.indexOf(code[0])`.
+`PATCH`/`DELETE` are hidden unless `ADMIN_TOKEN` is set, then require the
+`x-admin-token` header — links are immutable to the public. They're durable only
+on the instance that owns the code (mutations are ordered within the owner's
+log); `409` means route to the owning instance — for generated codes that's
+`ALPHABET.indexOf(code[0])`.
 
 Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 7 random). Aliases: `[0-9A-Za-z_-]{1,64}`. Single POST body ≤4 KB.
@@ -68,6 +70,7 @@ Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 | `HITS` | `1` | `0` disables hit counting (removes ~2 map ops/redirect) |
 | `TAIL_MS` | `0` | >0 enables periodic sibling-log polling (on-miss always on) |
 | `CORS_ORIGIN` | `*` | value of `Access-Control-Allow-Origin` |
+| `ADMIN_TOKEN` | unset | enables PATCH/DELETE; requests need `x-admin-token: <value>` |
 
 ## Performance
 
@@ -113,6 +116,18 @@ best measured engine (uWS); that puts one core at ~150-300k req/s and this whole
 machine at ~1-2M/s even with perfect scaling. 100M/s over HTTP needs a fleet
 (~30-100 machines) or in-process access (3.1M/s/thread here — ~30 threads of pure
 `Map.get` with no I/O). The read path is already at its floor: a single Map lookup.
+
+### Capacity: what 1B links cost (measured on this build)
+
+| tier | per link (64-char url) | ×1B |
+|---|---|---|
+| RAM — `Map` + entry objects | ~282 B | **~262 GiB** |
+| disk — AOF row lines | ~131 B | **~122 GiB** (+ hit deltas) |
+
+The RAM cost is the architecture's real constraint — an in-memory index this
+large wants either a big-memory host or prefix-sharding across ~3-4 machines
+(`code[0]` routes to the owner). Disk is cheap by comparison; `compact()`
+bounds log growth and hit deltas dominate churn, not rows.
 
 ### What the loop tried (all measured, honest outcomes)
 

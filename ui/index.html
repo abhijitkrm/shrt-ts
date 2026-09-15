@@ -168,19 +168,6 @@
   .empty { text-align: center; padding: 60px 0; color: var(--dim); }
   .empty b { display: block; font-size: 20px; color: var(--txt); margin-bottom: 6px; }
 
-  /* --- edit modal --- */
-  #modal {
-    position: fixed; inset: 0; display: none; place-items: center; z-index: 20;
-    background: rgba(4,4,8,.6); backdrop-filter: blur(8px);
-  }
-  #modal.show { display: grid; }
-  #modal .card { width: min(480px, 92vw); padding: 24px; animation: rise .3s cubic-bezier(.2,.9,.3,1.2); }
-  #modal h3 { margin-bottom: 16px; font-size: 18px; }
-  #modal .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
-  #modal label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
-  #modal .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
-  #modal .btn { padding: 12px 22px; }
-
   /* --- toasts --- */
   #toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
   .toast {
@@ -249,18 +236,6 @@
   </div>
 </div>
 
-<div id="modal">
-  <div class="card">
-    <h3>Edit <span id="editCode" style="font-family:'JetBrains Mono',monospace;color:#b9b3ff"></span></h3>
-    <div class="field"><label>destination url</label><input id="editUrl" type="url" /></div>
-    <div class="field"><label>ttl (seconds, empty = keep)</label><input id="editTtl" type="number" min="1" /></div>
-    <div class="row">
-      <button class="ghost" id="editCancel" style="margin-left:0">cancel</button>
-      <button class="btn" id="editSave">save</button>
-    </div>
-  </div>
-</div>
-
 <div id="toasts"></div>
 
 <script>
@@ -309,8 +284,6 @@ async function load() {
       <td class="time">${ago(l.created_at)}</td>
       <td class="acts">
         <button class="icon-btn" data-copy="${esc(l.code)}">copy</button>
-        <button class="icon-btn" data-edit="${esc(l.code)}">edit</button>
-        <button class="icon-btn danger" data-del="${esc(l.code)}">delete</button>
       </td></tr>`
     )
     .join("");
@@ -352,54 +325,10 @@ async function copy(text, el) {
 }
 $("copyBtn").addEventListener("click", (e) => copy($("shortUrl").textContent.replace(API + "/", ""), e.target));
 
-let editing = null;
-$("rows").addEventListener("click", async (e) => {
+$("rows").addEventListener("click", (e) => {
   const b = e.target.closest("button");
-  if (!b) return;
-  if (b.dataset.copy) return copy(b.dataset.copy, b);
-  if (b.dataset.edit) {
-    editing = b.dataset.edit;
-    const s = await api("/api/stats/" + encodeURIComponent(editing));
-    $("editCode").textContent = "/" + editing;
-    $("editUrl").value = s.url;
-    $("editTtl").value = "";
-    $("modal").classList.add("show");
-    return;
-  }
-  if (b.dataset.del) {
-    if (!b.classList.contains("arm")) {
-      b.classList.add("arm");
-      b.textContent = "sure?";
-      setTimeout(() => { b.classList.remove("arm"); b.textContent = "delete"; }, 2000);
-      return;
-    }
-    try {
-      await api("/api/links/" + encodeURIComponent(b.dataset.del), { method: "DELETE" });
-      toast("deleted /" + b.dataset.del);
-      load();
-    } catch (err) { toast(err.message, true); }
-  }
+  if (b?.dataset.copy) copy(b.dataset.copy, b);
 });
-
-$("editSave").addEventListener("click", async () => {
-  const url = $("editUrl").value.trim();
-  const ttlS = Number($("editTtl").value);
-  const body = {};
-  if (url) body.url = url;
-  if (ttlS > 0) body.ttl_ms = ttlS * 1000;
-  try {
-    await api("/api/links/" + encodeURIComponent(editing), {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    $("modal").classList.remove("show");
-    toast("updated /" + editing);
-    load();
-  } catch (err) { toast(err.message, true); }
-});
-$("editCancel").addEventListener("click", () => $("modal").classList.remove("show"));
-$("modal").addEventListener("click", (e) => e.target.id === "modal" && $("modal").classList.remove("show"));
 
 $("search").addEventListener("input", (e) => {
   clearTimeout(debounce);

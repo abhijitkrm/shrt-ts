@@ -171,7 +171,8 @@ test("list links with pagination, sort, search", async () => {
   assert.deepEqual([...hits].sort((a, b) => b - a), hits);
 });
 
-test("PATCH updates url and ttl", async () => {
+test("mutations are 404 without admin token; work with it", async () => {
+  delete process.env.ADMIN_TOKEN;
   const create = await fetch(`${base}/api/shorten`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -179,9 +180,45 @@ test("PATCH updates url and ttl", async () => {
   });
   const { code } = await create.json();
 
+  // no ADMIN_TOKEN configured -> endpoints hidden entirely
+  assert.equal(
+    (await fetch(`${base}/api/links/${code}`, { method: "DELETE" })).status,
+    404
+  );
+  assert.equal(
+    (
+      await fetch(`${base}/api/links/${code}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: "https://after.example" }),
+      })
+    ).status,
+    404
+  );
+
+  // token set but not provided -> still 404; wrong token -> 404
+  process.env.ADMIN_TOKEN = "secret";
+  assert.equal(
+    (await fetch(`${base}/api/links/${code}`, { method: "DELETE" })).status,
+    404
+  );
+  assert.equal(
+    (
+      await fetch(`${base}/api/links/${code}`, {
+        method: "DELETE",
+        headers: { "x-admin-token": "wrong" },
+      })
+    ).status,
+    404
+  );
+
+  // correct token -> works
   const patch = await fetch(`${base}/api/links/${code}`, {
     method: "PATCH",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-admin-token": "secret",
+    },
     body: JSON.stringify({ url: "https://after.example", ttl_ms: 60000 }),
   });
   assert.equal(patch.status, 200);
@@ -192,27 +229,46 @@ test("PATCH updates url and ttl", async () => {
 
   const bad = await fetch(`${base}/api/links/${code}`, {
     method: "PATCH",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-admin-token": "secret",
+    },
     body: JSON.stringify({ url: "notaurl" }),
   });
   assert.equal(bad.status, 400);
   assert.equal(
-    (await fetch(`${base}/api/links/nope`, { method: "PATCH", body: "{}" })).status,
+    (
+      await fetch(`${base}/api/links/nope`, {
+        method: "PATCH",
+        headers: { "x-admin-token": "secret" },
+        body: "{}",
+      })
+    ).status,
     400
   );
+  delete process.env.ADMIN_TOKEN;
 });
 
 test("DELETE removes link and frees alias", async () => {
+  process.env.ADMIN_TOKEN = "secret";
   await fetch(`${base}/api/shorten`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ url: "https://del.example", alias: "todelete" }),
   });
-  const del = await fetch(`${base}/api/links/todelete`, { method: "DELETE" });
+  const del = await fetch(`${base}/api/links/todelete`, {
+    method: "DELETE",
+    headers: { "x-admin-token": "secret" },
+  });
   assert.equal(del.status, 204);
   assert.equal((await fetch(`${base}/todelete`)).status, 404);
   assert.equal(
-    (await fetch(`${base}/api/links/todelete`, { method: "DELETE" })).status,
+    (
+      await fetch(`${base}/api/links/todelete`, {
+        method: "DELETE",
+        headers: { "x-admin-token": "secret" },
+      })
+    ).status,
     404
   );
   const reuse = await fetch(`${base}/api/shorten`, {
