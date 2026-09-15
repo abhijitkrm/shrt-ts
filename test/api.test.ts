@@ -27,6 +27,16 @@ test("health", async () => {
   assert.deepEqual(await res.json(), { ok: true });
 });
 
+test("metrics endpoint reports counters", async () => {
+  const res = await fetch(`${base}/api/metrics`);
+  assert.equal(res.status, 200);
+  const m = await res.json();
+  assert.ok(typeof m.req_s === "number" && m.req_s >= 0);
+  assert.ok(m.total > 0); // earlier tests generated requests
+  assert.ok(Array.isArray(m.per_second) && m.per_second.length === 31);
+  assert.ok(m.uptime_s >= 0);
+});
+
 test("GET / serves the UI when ui/index.html exists", async () => {
   const res = await fetch(`${base}/`);
   assert.equal(res.status, 200); // tests run from repo root where ui/ exists

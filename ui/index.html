@@ -126,6 +126,11 @@
     margin-top: 10px; font-family: "JetBrains Mono", monospace;
     font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-2);
   }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 20px; margin-top: 12px; }
+  .spark i {
+    flex: 1; min-height: 1px; background: var(--accent); border-radius: 1px;
+    opacity: .8; transition: height .3s ease;
+  }
 
   footer {
     margin-top: 80px; padding-top: 24px; border-top: 1px solid var(--line);
@@ -184,7 +189,7 @@
   <div class="stats rev">
     <div class="stat"><div class="n" id="stLinks">—</div><div class="l">Links indexed</div></div>
     <div class="stat"><div class="n" id="stHits">—</div><div class="l">Redirects served</div></div>
-    <div class="stat"><div class="n">~0.1<span style="font-size:.5em">ms</span></div><div class="l">Avg redirect</div></div>
+    <div class="stat"><div class="n" id="stRps">0</div><div class="l">Live req/s</div><div class="spark" id="spark"></div></div>
     <div class="stat"><div class="n">24<span style="font-size:.5em">h</span></div><div class="l">Link lifetime</div></div>
   </div>
 
@@ -217,6 +222,17 @@ async function api(path, opts) {
 }
 
 const fmtN = (n) => n.toLocaleString("en-US");
+
+async function tickMetrics() {
+  try {
+    const m = await api("/api/metrics");
+    $("stRps").textContent = fmtN(m.req_s);
+    const max = Math.max(...m.per_second, 1);
+    $("spark").innerHTML = m.per_second
+      .map((v) => `<i style="height:${Math.max(4, (v / max) * 100)}%"></i>`)
+      .join("");
+  } catch {}
+}
 
 async function load() {
   try {
@@ -276,7 +292,9 @@ document.querySelectorAll(".rev").forEach((el) => io.observe(el));
     $("healthPill").classList.add("off");
   }
   load();
+  tickMetrics();
   setInterval(load, 15000);
+  setInterval(tickMetrics, 1000);
 })();
 </script>
 </body>

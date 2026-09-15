@@ -7,6 +7,7 @@ import {
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Store } from "./store.js";
+import * as metrics from "./metrics.js";
 
 const CODE_RE = /^[0-9A-Za-z_-]{1,64}$/;
 const MAX_BODY = 4096;
@@ -138,10 +139,15 @@ export function handle(
   const pathname = q < 0 ? path : path.slice(0, q);
   const query = q < 0 ? "" : path.slice(q + 1);
 
+  metrics.tick();
+
   if (method === "OPTIONS") return { status: 204 };
 
   if (method === "GET") {
     if (pathname === "/api/health") return { status: 200, body: '{"ok":true}' };
+    if (pathname === "/api/metrics") {
+      return { status: 200, body: JSON.stringify(metrics.snapshot()) };
+    }
     if (pathname === "/") {
       const html = uiHtml();
       return html === null
