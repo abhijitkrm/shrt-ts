@@ -133,3 +133,85 @@ test("rejects oversized body", async () => {
   });
   assert.ok([400, 413].includes(res.status));
 });
+
+test("CORS: preflight OPTIONS + headers on responses", async () => {
+  const pre = await fetch(`${base}/api/shorten`, { method: "OPTIONS" });
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers.get("access-control-allow-origin"), "*");
+  assert.match(
+    pre.headers.get("access-control-allow-methods") ?? "",
+    /DELETE/
+  );
+  const res = await fetch(`${base}/api/health`);
+  assert.equal(res.headers.get("access-control-allow-origin"), "*");
+});
+
+test("list links with pagination, sort, search", async () => {
+  const res = await fetch(`${base}/api/links?limit=5&offset=0`);
+  assert.equal(res.status, 200);
+  const { links, total } = await res.json();
+  assert.ok(total >= 1);
+  assert.ok(links.length <= 5);
+  assert.ok(links[0].code && links[0].url);
+
+  const searched = await fetch(`${base}/api/links?q=${encodeURIComponent("example.com")}`);
+  const sBody = await searched.json();
+  assert.ok(sBody.links.every((l: any) => l.url.includes("example.com") || l.code.includes("example.com")));
+
+  const top = await fetch(`${base}/api/links?sort=hits&limit=3`);
+  const tBody = await top.json();
+  const hits = tBody.links.map((l: any) => l.hits);
+  assert.deepEqual([...hits].sort((a, b) => b - a), hits);
+});
+
+test("PATCH updates url and ttl", async () => {
+  const create = await fetch(`${base}/api/shorten`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://before.example" }),
+  });
+  const { code } = await create.json();
+
+  const patch = await fetch(`${base}/api/links/${code}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://after.example", ttl_ms: 60000 }),
+  });
+  assert.equal(patch.status, 200);
+  const redir = await fetch(`${base}/${code}`, { redirect: "manual" });
+  assert.equal(redir.headers.get("location"), "https://after.example");
+  const stats = await (await fetch(`${base}/api/stats/${code}`)).json();
+  assert.ok(stats.expires_at > Date.now());
+
+  const bad = await fetch(`${base}/api/links/${code}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "notaurl" }),
+  });
+  assert.equal(bad.status, 400);
+  assert.equal(
+    (await fetch(`${base}/api/links/nope`, { method: "PATCH", body: "{}" })).status,
+    400
+  );
+});
+
+test("DELETE removes link and frees alias", async () => {
+  await fetch(`${base}/api/shorten`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://del.example", alias: "todelete" }),
+  });
+  const del = await fetch(`${base}/api/links/todelete`, { method: "DELETE" });
+  assert.equal(del.status, 204);
+  assert.equal((await fetch(`${base}/todelete`)).status, 404);
+  assert.equal(
+    (await fetch(`${base}/api/links/todelete`, { method: "DELETE" })).status,
+    404
+  );
+  const reuse = await fetch(`${base}/api/shorten`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://new.example", alias: "todelete" }),
+  });
+  assert.equal(reuse.status, 201);
+});

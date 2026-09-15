@@ -111,7 +111,13 @@ export class Store {
     n?: number;
     h?: string;
     d?: number;
+    x?: string;
   }): void {
+    if (o.x !== undefined) {
+      this.data.delete(o.x);
+      this.strayHits.delete(o.x);
+      return;
+    }
     if (o.h !== undefined) {
       const d = o.d ?? 0;
       const own = o.i === this.instance;
@@ -271,6 +277,63 @@ export class Store {
 
   isEmpty(): boolean {
     return this.data.size === 0;
+  }
+
+  /**
+   * Update url/ttl in place. Durable only on the owning instance — mutations
+   * are ordered within the owner's log, so "remote" tells the caller to route
+   * to instance e.i (generated codes: owner = ALPHABET.indexOf(code[0])).
+   */
+  update(
+    code: string,
+    url: string,
+    ttlMs?: number
+  ): "ok" | "missing" | "remote" {
+    const e = this.data.get(code);
+    if (!e) return "missing";
+    if (e.i !== this.instance) return "remote";
+    const exp = ttlMs === undefined ? e.e : ttlMs > 0 ? Date.now() + ttlMs : null;
+    e.u = url;
+    e.e = exp;
+    // n=0: hits continue accumulating via delta lines (see compact/apply)
+    this.aof?.push(rowLine(code, esc(url), e.a, exp, this.instance));
+    return "ok";
+  }
+
+  /** Delete a link. Same owner rule as update(). */
+  remove(code: string): "ok" | "missing" | "remote" {
+    const e = this.data.get(code);
+    if (!e) return "missing";
+    if (e.i !== this.instance) return "remote";
+    this.data.delete(code);
+    this.aof?.push(`{"x":"${code}"}`);
+    return "ok";
+  }
+
+  /** O(n) scan for UI listing — admin path, not the hot path. */
+  list(
+    limit: number,
+    offset: number,
+    sort: "created" | "hits",
+    q?: string
+  ): { links: Link[]; total: number } {
+    const items: Link[] = [];
+    for (const [code, e] of this.data) {
+      if (q && !code.includes(q) && !e.u.includes(q)) continue;
+      items.push({
+        code,
+        url: e.u,
+        hits: e.h,
+        created_at: e.a,
+        expires_at: e.e,
+      });
+    }
+    items.sort(
+      sort === "hits"
+        ? (x, y) => y.hits - x.hits
+        : (x, y) => y.created_at - x.created_at
+    );
+    return { links: items.slice(offset, offset + limit), total: items.length };
   }
 
   stats(code: string): Link | null {

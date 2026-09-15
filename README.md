@@ -38,8 +38,18 @@ pnpm bench            # build + spawn real servers + autocannon scenarios
 | `POST` | `/api/shorten` | `{url, alias?, ttl_ms?}` → `201 {code, short_url}`; `409` alias taken; `400` invalid |
 | `POST` | `/api/shorten/bulk` | `{urls: […≤10000]}` → `201 {count, codes}` (body ≤1 MB, fast-path validation) |
 | `GET` | `/{code}` | `302` + `Location`; `404` unknown/expired |
+| `GET` | `/api/links` | `?limit(≤1000)&offset&sort=created\|hits&q=` → `{links, total}` (O(n) scan — admin path) |
 | `GET` | `/api/stats/{code}` | `{code, url, hits, created_at, expires_at}` |
+| `PATCH` | `/api/links/{code}` | `{url?, ttl_ms?}` → `200`; `404` missing; `409` owned by another instance |
+| `DELETE` | `/api/links/{code}` | → `204`; `404` missing; `409` owned by another instance |
+| `OPTIONS` | any | `204` CORS preflight |
 | `GET` | `/api/health` | `{ok: true}` |
+
+CORS: `Access-Control-Allow-Origin` on every response (`CORS_ORIGIN` env, default `*`).
+
+`PATCH`/`DELETE` are durable only on the instance that owns the code (mutations
+are ordered within the owner's log). `409` means route the request to the owning
+instance — for generated codes that's `ALPHABET.indexOf(code[0])`.
 
 Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 7 random). Aliases: `[0-9A-Za-z_-]{1,64}`. Single POST body ≤4 KB.
@@ -56,6 +66,7 @@ Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 | `SEED` | `0` | bulk-insert N links if empty (random codes) |
 | `HITS` | `1` | `0` disables hit counting (removes ~2 map ops/redirect) |
 | `TAIL_MS` | `0` | >0 enables periodic sibling-log polling (on-miss always on) |
+| `CORS_ORIGIN` | `*` | value of `Access-Control-Allow-Origin` |
 
 ## Performance
 

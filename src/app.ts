@@ -10,6 +10,10 @@ const CODE_RE = /^[0-9A-Za-z_-]{1,64}$/;
 const MAX_BODY = 4096;
 const MAX_BULK_BODY = 1 << 20;
 const MAX_BULK_URLS = 10_000;
+const MAX_LIST_LIMIT = 1000;
+
+/** Origin for Access-Control-Allow-Origin; "*" = any (dev default). */
+export const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "*";
 
 export interface Reply {
   status: number;
@@ -81,6 +85,17 @@ function shortenBulk(store: Store, parsed: { urls?: unknown }): Reply {
   return { status: 201, body: JSON.stringify({ count: codes.length, codes }) };
 }
 
+function parseBody(body?: string): Record<string, unknown> | Reply {
+  try {
+    return JSON.parse(body ?? "") as Record<string, unknown>;
+  } catch {
+    return bad("invalid json");
+  }
+}
+
+const isReply = (v: unknown): v is Reply =>
+  typeof (v as Reply).status === "number";
+
 /** Transport-agnostic request handler shared by node:http and uWS. */
 export function handle(
   store: Store,
@@ -88,15 +103,33 @@ export function handle(
   path: string,
   body?: string
 ): Reply {
+  const q = path.indexOf("?");
+  const pathname = q < 0 ? path : path.slice(0, q);
+  const query = q < 0 ? "" : path.slice(q + 1);
+
+  if (method === "OPTIONS") return { status: 204 };
+
   if (method === "GET") {
-    if (path === "/api/health") return { status: 200, body: '{"ok":true}' };
-    if (path.startsWith("/api/stats/")) {
-      const link = store.stats(path.slice(11));
+    if (pathname === "/api/health") return { status: 200, body: '{"ok":true}' };
+    if (pathname === "/api/links") {
+      const p = new URLSearchParams(query);
+      const limit = Math.min(
+        Math.max(Number(p.get("limit")) || 50, 1),
+        MAX_LIST_LIMIT
+      );
+      const offset = Math.max(Number(p.get("offset")) || 0, 0);
+      const sort = p.get("sort") === "hits" ? "hits" : "created";
+      const search = p.get("q") ?? undefined;
+      const { links, total } = store.list(limit, offset, sort, search);
+      return { status: 200, body: JSON.stringify({ links, total }) };
+    }
+    if (pathname.startsWith("/api/stats/")) {
+      const link = store.stats(pathname.slice(11));
       return link
         ? { status: 200, body: JSON.stringify(link) }
         : { status: 404, body: '{"error":"not found"}' };
     }
-    const code = path.slice(1);
+    const code = pathname.slice(1);
     const target = CODE_RE.test(code) ? store.resolve(code) : null;
     return target === null
       ? { status: 404, body: '{"error":"not found"}' }
@@ -104,30 +137,61 @@ export function handle(
   }
 
   if (method === "POST") {
-    if (path !== "/api/shorten" && path !== "/api/shorten/bulk") {
+    if (pathname !== "/api/shorten" && pathname !== "/api/shorten/bulk") {
       return { status: 404, body: '{"error":"not found"}' };
     }
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(body ?? "");
-    } catch {
-      return bad("invalid json");
-    }
-    return path === "/api/shorten"
+    const parsed = parseBody(body);
+    if (isReply(parsed)) return parsed;
+    return pathname === "/api/shorten"
       ? shortenOne(store, parsed)
       : shortenBulk(store, parsed);
+  }
+
+  if (method === "PATCH" || method === "DELETE") {
+    if (!pathname.startsWith("/api/links/")) {
+      return { status: 404, body: '{"error":"not found"}' };
+    }
+    const code = pathname.slice(11);
+    if (!CODE_RE.test(code)) return bad("invalid code");
+    if (method === "DELETE") {
+      const r = store.remove(code);
+      if (r === "ok") return { status: 204 };
+      return r === "missing"
+        ? { status: 404, body: '{"error":"not found"}' }
+        : { status: 409, body: '{"error":"owned by another instance"}' };
+    }
+    const parsed = parseBody(body);
+    if (isReply(parsed)) return parsed;
+    if (parsed.url !== undefined) {
+      if (typeof parsed.url !== "string" || !isValidUrl(parsed.url)) {
+        return bad("invalid url");
+      }
+      const r = store.update(
+        code,
+        parsed.url,
+        parsed.ttl_ms as number | undefined
+      );
+      if (r === "ok") return { status: 200, body: '{"ok":true}' };
+      return r === "missing"
+        ? { status: 404, body: '{"error":"not found"}' }
+        : { status: 409, body: '{"error":"owned by another instance"}' };
+    }
+    return bad("nothing to update");
   }
 
   return { status: 404, body: '{"error":"not found"}' };
 }
 
 function send(res: ServerResponse, reply: Reply): void {
-  if (reply.location !== undefined) {
-    res.writeHead(reply.status, { location: reply.location });
-    res.end();
-    return;
-  }
-  res.writeHead(reply.status, { "content-type": "application/json" });
+  const headers: Record<string, string> = {
+    "access-control-allow-origin": CORS_ORIGIN,
+    "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "access-control-max-age": "86400",
+  };
+  if (reply.location !== undefined) headers.location = reply.location;
+  else headers["content-type"] = "application/json";
+  res.writeHead(reply.status, headers);
   res.end(reply.body);
 }
 
@@ -163,8 +227,9 @@ export function createApp(store: Store): Server {
   return createServer((req, res) => {
     const method = req.method ?? "GET";
     const path = req.url ?? "/";
-    if (method === "POST") {
-      const limit = path === "/api/shorten/bulk" ? MAX_BULK_BODY : MAX_BODY;
+    if (method === "POST" || method === "PATCH") {
+      const pathname = path.split("?", 1)[0];
+      const limit = pathname === "/api/shorten/bulk" ? MAX_BULK_BODY : MAX_BODY;
       readBody(req, res, limit, (raw) =>
         send(res, handle(store, method, path, raw))
       );
