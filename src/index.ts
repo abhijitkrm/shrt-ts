@@ -1,6 +1,7 @@
 import cluster from "node:cluster";
 import { availableParallelism } from "node:os";
-import { Store } from "./store.js";
+import { openStore } from "./openstore.js";
+import type { StoreApi } from "./storeapi.js";
 import { createApp } from "./app.js";
 import { createUwsApp } from "./uws.js";
 
@@ -12,18 +13,18 @@ const SERVER = process.env.SERVER ?? "uws";
 const PORT_OFFSET = Number(process.env.PORT_OFFSET ?? 0);
 const INSTANCE = process.env.INSTANCE;
 
-function seed(): void {
-  const s = new Store(DATA_DIR);
-  if (s.isEmpty()) {
+async function seed(): Promise<void> {
+  const s = await openStore(DATA_DIR);
+  if (await s.isEmpty()) {
     const urls = new Array<string>(SEED);
     for (let i = 0; i < SEED; i++) urls[i] = `https://example.com/${i}`;
-    s.seed(urls);
+    await s.seed(urls);
   }
   s.close();
 }
 
-function serve(): void {
-  const store = new Store(
+async function serve(): Promise<void> {
+  const store = await openStore(
     DATA_DIR,
     INSTANCE !== undefined ? Number(INSTANCE) : undefined
   );
@@ -48,7 +49,7 @@ function serve(): void {
   shutdown(store, () => server.close());
 }
 
-function shutdown(store: Store, closeServer?: () => void): void {
+function shutdown(store: StoreApi, closeServer?: () => void): void {
   const fn = () => {
     closeServer?.();
     store.close();

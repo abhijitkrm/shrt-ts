@@ -1,5 +1,5 @@
 import uWS from "uWebSockets.js";
-import { Store } from "./store.js";
+import type { StoreApi } from "./storeapi.js";
 import { handle, Reply, CORS_ORIGIN } from "./app.js";
 
 const MAX_BODY = 4096;
@@ -42,7 +42,7 @@ function respond(res: uWS.HttpResponse, reply: Reply): void {
   res.end(reply.body);
 }
 
-export function createUwsApp(store: Store): uWS.TemplatedApp {
+export function createUwsApp(store: StoreApi): uWS.TemplatedApp {
   return uWS.App().any("/*", (res, req) => {
     const method = METHODS[req.getMethod()] ?? "OTHER";
     const url = req.getUrl();
@@ -73,13 +73,21 @@ export function createUwsApp(store: Store): uWS.TemplatedApp {
             chunks.length === 1
               ? chunks[0].toString()
               : Buffer.concat(chunks).toString();
-          res.cork(() =>
-            respond(res, handle(store, method, path, raw, admin))
-          );
+          void handle(store, method, path, raw, admin).then((r) => {
+            if (done) return;
+            res.cork(() => respond(res, r));
+          });
         }
       });
       return;
     }
-    respond(res, handle(store, method, path, undefined, admin));
+    let done = false;
+    res.onAborted(() => {
+      done = true;
+    });
+    void handle(store, method, path, undefined, admin).then((r) => {
+      if (done) return;
+      res.cork(() => respond(res, r));
+    });
   });
 }

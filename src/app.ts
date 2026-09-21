@@ -6,7 +6,8 @@ import {
 } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Store } from "./store.js";
+import type { StoreApi } from "./storeapi.js";
+import type { Link } from "./store.js";
 import * as metrics from "./metrics.js";
 
 const CODE_RE = /^[0-9A-Za-z_-]{1,64}$/;
@@ -63,10 +64,10 @@ function bad(error: string): Reply {
   return { status: 400, body: `{"error":"${error}"}` };
 }
 
-function shortenOne(
-  store: Store,
+async function shortenOne(
+  store: StoreApi,
   parsed: { url?: unknown; alias?: unknown; ttl_ms?: unknown }
-): Reply {
+): Promise<Reply> {
   if (typeof parsed.url !== "string" || !isValidUrl(parsed.url)) {
     return bad("invalid url");
   }
@@ -82,7 +83,7 @@ function shortenOne(
   ) {
     return bad("invalid ttl_ms");
   }
-  const code = store.shorten(
+  const code = await store.shorten(
     parsed.url,
     parsed.alias as string | undefined,
     Math.min(
@@ -103,7 +104,7 @@ const okBulkUrl = (u: unknown): u is string =>
   (u.startsWith("http://") || u.startsWith("https://")) &&
   !/["\\\n\r]/.test(u);
 
-function shortenBulk(store: Store, parsed: { urls?: unknown }): Reply {
+async function shortenBulk(store: StoreApi, parsed: { urls?: unknown }): Promise<Reply> {
   if (
     !Array.isArray(parsed.urls) ||
     parsed.urls.length === 0 ||
@@ -112,7 +113,7 @@ function shortenBulk(store: Store, parsed: { urls?: unknown }): Reply {
   ) {
     return bad(`urls must be 1-${MAX_BULK_URLS} valid http(s) urls`);
   }
-  const codes = store.shortenMany(parsed.urls, LINK_TTL_MS);
+  const codes = await store.shortenMany(parsed.urls, LINK_TTL_MS);
   return { status: 201, body: JSON.stringify({ count: codes.length, codes }) };
 }
 
@@ -128,13 +129,13 @@ const isReply = (v: unknown): v is Reply =>
   typeof (v as Reply).status === "number";
 
 /** Transport-agnostic request handler shared by node:http and uWS. */
-export function handle(
-  store: Store,
+export async function handle(
+  store: StoreApi,
   method: string,
   path: string,
   body?: string,
   adminToken?: string
-): Reply {
+): Promise<Reply> {
   const q = path.indexOf("?");
   const pathname = q < 0 ? path : path.slice(0, q);
   const query = q < 0 ? "" : path.slice(q + 1);
@@ -163,17 +164,17 @@ export function handle(
       const offset = Math.max(Number(p.get("offset")) || 0, 0);
       const sort = p.get("sort") === "hits" ? "hits" : "created";
       const search = p.get("q") ?? undefined;
-      const { links, total } = store.list(limit, offset, sort, search);
+      const { links, total } = await store.list(limit, offset, sort, search);
       return { status: 200, body: JSON.stringify({ links, total }) };
     }
     if (pathname.startsWith("/api/stats/")) {
-      const link = store.stats(pathname.slice(11));
+      const link = await store.stats(pathname.slice(11));
       return link
         ? { status: 200, body: JSON.stringify(link) }
         : { status: 404, body: '{"error":"not found"}' };
     }
     const code = pathname.slice(1);
-    const target = CODE_RE.test(code) ? store.resolve(code) : null;
+    const target = CODE_RE.test(code) ? await store.resolve(code) : null;
     return target === null
       ? { status: 404, body: '{"error":"not found"}' }
       : { status: 302, location: target };
@@ -197,7 +198,7 @@ export function handle(
     const code = pathname.slice(11);
     if (!CODE_RE.test(code)) return bad("invalid code");
     if (method === "DELETE") {
-      const r = store.remove(code);
+      const r = await store.remove(code);
       if (r === "ok") return { status: 204 };
       return r === "missing"
         ? { status: 404, body: '{"error":"not found"}' }
@@ -209,7 +210,7 @@ export function handle(
       if (typeof parsed.url !== "string" || !isValidUrl(parsed.url)) {
         return bad("invalid url");
       }
-      const r = store.update(
+      const r = await store.update(
         code,
         parsed.url,
         parsed.ttl_ms === undefined
@@ -268,7 +269,7 @@ function readBody(
   req.on("error", () => res.destroy());
 }
 
-export function createApp(store: Store): Server {
+export function createApp(store: StoreApi): Server {
   return createServer((req, res) => {
     const method = req.method ?? "GET";
     const path = req.url ?? "/";
@@ -277,11 +278,13 @@ export function createApp(store: Store): Server {
     if (method === "POST" || method === "PATCH") {
       const pathname = path.split("?", 1)[0];
       const limit = pathname === "/api/shorten/bulk" ? MAX_BULK_BODY : MAX_BODY;
-      readBody(req, res, limit, (raw) =>
-        send(res, handle(store, method, path, raw, admin))
-      );
+      readBody(req, res, limit, (raw) => {
+        void handle(store, method, path, raw, admin).then((r) => send(res, r));
+      });
     } else {
-      send(res, handle(store, method, path, undefined, admin));
+      void handle(store, method, path, undefined, admin).then((r) =>
+        send(res, r)
+      );
     }
   });
 }
