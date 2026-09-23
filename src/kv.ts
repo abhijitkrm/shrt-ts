@@ -180,6 +180,39 @@ export class Kv {
     return r.kind === "int" ? r.num : 0;
   }
 
+  async hget(key: string, field: string): Promise<Buffer | null> {
+    const r = await this.cmd("HGET", key, field);
+    return r.kind === "bulk" ? r.str : null;
+  }
+  async hsetnx(key: string, field: string, val: string): Promise<boolean> {
+    const r = await this.cmd("HSETNX", key, field, val);
+    return r.kind === "int" && r.num === 1;
+  }
+  async hset(key: string, field: string, val: string): Promise<void> {
+    await this.cmd("HSET", key, field, val);
+  }
+  async hdel(key: string, field: string): Promise<number> {
+    const r = await this.cmd("HDEL", key, field);
+    return r.kind === "int" ? r.num : 0;
+  }
+  async hincrbyMany(deltas: [string, string, number][]): Promise<void> {
+    if (!deltas.length) return;
+    await this.pipe(deltas.map(([k, f, n]) => ["HINCRBY", k, f, String(n)]));
+  }
+  async hscanEach(key: string, cb: (field: string, val: string) => void): Promise<void> {
+    let cursor = "0";
+    do {
+      const r = await this.cmd("HSCAN", key, cursor, "COUNT", "1000");
+      if (r.kind !== "arr" || !r.arr || r.arr.length !== 2) return;
+      const [cur, itemsR] = r.arr;
+      cursor = cur.kind === "bulk" && cur.str ? cur.str.toString()
+             : cur.kind === "simple" ? cur.str : "0";
+      const items = itemsR.kind === "arr" && itemsR.arr ? itemsR.arr : [];
+      const text = (r: Resp) => (r.kind === "bulk" && r.str ? r.str.toString() : "");
+      for (let i = 0; i + 1 < items.length; i += 2) cb(text(items[i]), text(items[i + 1]));
+    } while (cursor !== "0");
+  }
+
   async incrbyMany(deltas: [string, number][]): Promise<void> {
     if (deltas.length === 0) return;
     await this.pipe(deltas.map(([k, d]) => ["INCRBY", k, String(d)]));

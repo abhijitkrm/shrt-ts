@@ -31,6 +31,9 @@ export class KvStore implements StoreApi {
   private cache: CacheShard[] = [];
   private dirty: Map<string, number>[] = [];
   private timer: NodeJS.Timeout;
+  private janitor: NodeJS.Timeout | null = null;
+  private layoutHash: boolean;
+  private buckets: number;
   private closed = false;
 
   private constructor(kv: Kv, instance: number, cacheEntries: number, cacheTtlMs: number) {
@@ -43,10 +46,19 @@ export class KvStore implements StoreApi {
       this.cache.push({ m: new Map(), order: [], head: 0 });
       this.dirty.push(new Map());
     }
+    this.layoutHash = process.env.KV_LAYOUT === "hash";
+    this.buckets = Math.max(1, Number(process.env.KV_BUCKETS ?? 1_000_000) || 1_000_000);
     this.timer = setInterval(() => {
       this.flushHits().catch(() => {});
     }, FLUSH_MS);
     this.timer.unref();
+    if (this.layoutHash) {
+      const sweepMs = Math.max(50, Number(process.env.KV_SWEEP_MS ?? 3_600_000) || 3_600_000);
+      this.janitor = setInterval(() => {
+        this.sweepExpired().catch(() => {});
+      }, sweepMs);
+      this.janitor.unref();
+    }
   }
 
   static async open(
@@ -70,6 +82,30 @@ export class KvStore implements StoreApi {
 
   private lkey(c: string): string { return `l:${c}`; }
   private hkey(c: string): string { return `h:${c}`; }
+  private bkey(c: string): string { return `l:${this.shard(c) % this.buckets}`; }
+  private hfield(c: string): string { return `h:${c}`; }
+
+  private async kvGet(code: string): Promise<Buffer | null> {
+    return this.layoutHash ? this.kv.hget(this.bkey(code), code) : this.kv.get(this.lkey(code));
+  }
+
+  // janitor: HDEL fields past expiry (hash fields can't carry PX)
+  private async sweepExpired(): Promise<void> {
+    const buckets: string[] = [];
+    await this.kv.scanEach("l:*", (k) => buckets.push(k));
+    const now = Date.now();
+    const dels: string[][] = [];
+    for (const b of buckets) {
+      const dead: string[] = [];
+      await this.kv.hscanEach(b, (f, v) => {
+        if (f.startsWith("h:")) return;
+        const d = this.dec(v);
+        if (d && d.e !== 0 && d.e <= now) dead.push(f);
+      });
+      for (const f of dead) dels.push(["HDEL", b, f]);
+    }
+    if (dels.length) await this.kv.pipe(dels);
+  }
 
   // "{e}|{c}|{u}" — legacy "{e}|{u}" decodes with c=0
   private enc(e: number, c: number, u: string): string {
@@ -91,6 +127,15 @@ export class KvStore implements StoreApi {
   }
 
   private async flushHits(): Promise<void> {
+    if (this.layoutHash) {
+      const deltas: [string, string, number][] = [];
+      for (const d of this.dirty) {
+        for (const [code, n] of d) deltas.push([this.bkey(code), this.hfield(code), n]);
+        d.clear();
+      }
+      await this.kv.hincrbyMany(deltas);
+      return;
+    }
     const deltas: [string, number][] = [];
     for (const d of this.dirty) {
       for (const [code, n] of d) deltas.push([this.hkey(code), n]);
@@ -151,7 +196,7 @@ export class KvStore implements StoreApi {
     }
     let v: Buffer | null;
     try {
-      v = await this.kv.get(this.lkey(code));
+      v = await this.kvGet(code);
     } catch {
       return null;
     }
@@ -168,13 +213,17 @@ export class KvStore implements StoreApi {
     const exp = ttlMs > 0 ? now + ttlMs : 0;
     try {
       if (alias !== undefined) {
-        return (await this.kv.set(this.lkey(alias), this.enc(exp, now, url), ttlMs, true))
-          ? alias
-          : null;
+        const ok = this.layoutHash
+          ? await this.kv.hsetnx(this.bkey(alias), alias, this.enc(exp, now, url))
+          : await this.kv.set(this.lkey(alias), this.enc(exp, now, url), ttlMs, true);
+        return ok ? alias : null;
       }
       for (;;) {
         const c = this.genCode();
-        if (await this.kv.set(this.lkey(c), this.enc(exp, now, url), ttlMs, true)) return c;
+        const ok = this.layoutHash
+          ? await this.kv.hsetnx(this.bkey(c), c, this.enc(exp, now, url))
+          : await this.kv.set(this.lkey(c), this.enc(exp, now, url), ttlMs, true);
+        if (ok) return c;
       }
     } catch {
       return null;
@@ -186,6 +235,8 @@ export class KvStore implements StoreApi {
     const exp = ttlMs > 0 ? now + ttlMs : 0;
     const codes = urls.map(() => this.genCode());
     const cmds = urls.map((u, i) => {
+      if (this.layoutHash)
+        return ["HSETNX", this.bkey(codes[i]), codes[i], this.enc(exp, now, u)];
       const a = ["SET", this.lkey(codes[i]), this.enc(exp, now, u)];
       if (ttlMs > 0) a.push("PX", String(ttlMs));
       a.push("NX");
@@ -199,7 +250,10 @@ export class KvStore implements StoreApi {
     }
     for (let i = 0; i < urls.length; i++) {
       const r = rs[i];
-      if (!r || r.kind !== "simple" || r.str !== "OK") {
+      const ok = this.layoutHash
+        ? r && r.kind === "int" && r.num === 1
+        : r && r.kind === "simple" && r.str === "OK";
+      if (!ok) {
         const c2 = await this.shorten(urls[i], undefined, ttlMs);
         if (c2) codes[i] = c2;
       }
@@ -210,7 +264,7 @@ export class KvStore implements StoreApi {
   async update(code: string, url: string, ttlMs?: number): Promise<MutRes> {
     let v: Buffer | null;
     try {
-      v = await this.kv.get(this.lkey(code));
+      v = await this.kvGet(code);
     } catch {
       return "missing";
     }
@@ -220,8 +274,10 @@ export class KvStore implements StoreApi {
     const exp = ttlMs === undefined ? d.e : ttlMs > 0 ? Date.now() + ttlMs : 0;
     const px = exp > 0 ? exp - Date.now() : 0;
     try {
-      if (!(await this.kv.set(this.lkey(code), this.enc(exp, d.c, url), px, false)))
-        return "missing";
+      const ok = this.layoutHash
+        ? (await this.kv.hset(this.bkey(code), code, this.enc(exp, d.c, url)), true)
+        : await this.kv.set(this.lkey(code), this.enc(exp, d.c, url), px, false);
+      if (!ok) return "missing";
     } catch {
       return "missing";
     }
@@ -232,12 +288,15 @@ export class KvStore implements StoreApi {
   async remove(code: string): Promise<MutRes> {
     let n: number;
     try {
-      n = await this.kv.del(this.lkey(code));
+      n = this.layoutHash
+        ? await this.kv.hdel(this.bkey(code), code)
+        : await this.kv.del(this.lkey(code));
     } catch {
       return "missing";
     }
     if (n <= 0) return "missing";
-    await this.kv.del(this.hkey(code)).catch(() => {});
+    if (this.layoutHash) await this.kv.hdel(this.bkey(code), this.hfield(code)).catch(() => {});
+    else await this.kv.del(this.hkey(code)).catch(() => {});
     this.cacheDel(code);
     return "ok";
   }
@@ -248,6 +307,35 @@ export class KvStore implements StoreApi {
     sort: "created" | "hits",
     q?: string
   ): Promise<{ links: Link[]; total: number }> {
+    const items: Link[] = [];
+    if (this.layoutHash) {
+      const now = Date.now();
+      const fields: [string, string][] = [];
+      const buckets: string[] = [];
+      try {
+        await this.kv.scanEach("l:*", (k) => buckets.push(k));
+        for (const b of buckets)
+          await this.kv.hscanEach(b, (f, v) => {
+            if (!f.startsWith("h:")) fields.push([f, v]);
+          });
+      } catch {
+        return { links: [], total: 0 };
+      }
+      const hcmds = fields.map(([f]) => ["HGET", this.bkey(f), this.hfield(f)]);
+      let hrs: Resp[] = [];
+      try { hrs = await this.kv.pipe(hcmds); } catch {}
+      for (let i = 0; i < fields.length; i++) {
+        const [code, val] = fields[i];
+        const d = this.dec(val);
+        if (!d || (d.e !== 0 && d.e <= now)) continue;
+        if (q && !code.includes(q) && !d.u.includes(q)) continue;
+        const rh = hrs[i];
+        const hits = rh && rh.kind === "bulk" && rh.str ? Number(rh.str.toString()) || 0 : 0;
+        items.push({ code, url: d.u, hits, created_at: d.c, expires_at: d.e !== 0 ? d.e : null });
+      }
+      items.sort(sort === "hits" ? (x, y) => y.hits - x.hits : (x, y) => y.created_at - x.created_at);
+      return { links: items.slice(offset, offset + limit), total: items.length };
+    }
     const keys: string[] = [];
     try {
       await this.kv.scanEach("l:*", (k) => keys.push(k));
@@ -264,7 +352,6 @@ export class KvStore implements StoreApi {
     } catch {
       rs = [];
     }
-    const items: Link[] = [];
     for (let i = 0; i < keys.length; i++) {
       const code = keys[i].slice(2);
       const rv = rs[2 * i];
@@ -294,7 +381,7 @@ export class KvStore implements StoreApi {
   async stats(code: string): Promise<Link | null> {
     let v: Buffer | null;
     try {
-      v = await this.kv.get(this.lkey(code));
+      v = await this.kvGet(code);
     } catch {
       return null;
     }
@@ -303,7 +390,9 @@ export class KvStore implements StoreApi {
     if (!d) return null;
     let hits = 0;
     try {
-      const hv = await this.kv.get(this.hkey(code));
+      const hv = this.layoutHash
+        ? await this.kv.hget(this.bkey(code), this.hfield(code))
+        : await this.kv.get(this.hkey(code));
       if (hv) hits = Number(hv.toString()) || 0;
     } catch {}
     hits += this.dirty[this.shard(code)].get(code) ?? 0;
@@ -323,6 +412,22 @@ export class KvStore implements StoreApi {
   }
 
   async isEmpty(): Promise<boolean> {
+    if (this.layoutHash) {
+      let any = false;
+      try {
+        const buckets: string[] = [];
+        await this.kv.scanEach("l:*", (k) => buckets.push(k));
+        for (const b of buckets) {
+          await this.kv.hscanEach(b, (f) => {
+            if (!f.startsWith("h:")) any = true;
+          });
+          if (any) return false;
+        }
+      } catch {
+        return true;
+      }
+      return true;
+    }
     let any = false;
     try {
       await this.kv.scanEach("l:*", () => {
@@ -341,6 +446,7 @@ export class KvStore implements StoreApi {
   compact(): void {}
   close(): void {
     if (this.closed) return;
+    if (this.janitor) clearInterval(this.janitor);
     this.closed = true;
     clearInterval(this.timer);
     this.kv.close();

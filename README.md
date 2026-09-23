@@ -77,11 +77,18 @@ Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 | `DRAGONFLY_ADDR` | `127.0.0.1:6379` | RESP endpoint (`KV_ADDR` also accepted) |
 | `CACHE` | `100000` | bounded hot FIFO entries kept in-process over the KV |
 | `CACHE_TTL_MS` | `5000` | staleness bound for cached entries |
+| `KV_LAYOUT` | `key` | `key` = one key/link; `hash` = fields in `KV_BUCKETS` hash buckets (~40% less corpus RAM) |
+| `KV_BUCKETS` | `1000000` | hash buckets when `KV_LAYOUT=hash` |
+| `KV_SWEEP_MS` | `3600000` | janitor interval sweeping expired hash fields (hash fields cannot carry PX; expiry is value-embedded + enforced on read) |
 
 With `STORE=dragonfly` the whole corpus lives in the RESP store (keys
 `l:{code}` → `{exp}|{created}|{url}`, `h:{code}` → hit counter, batched
 `INCRBY` every 5 ms) — process memory stays flat as links grow; a cache
-miss costs one `GET`. The request path becomes async (`handle()` returns a
+miss costs one `GET`. With `KV_LAYOUT=hash` the same record is a field
+`{code}` inside bucket `l:{shard(code) % KV_BUCKETS}` and hits live in
+field `h:{code}` of the same bucket (`HSETNX`/`HINCRBY`) — measured ~112
+B/link vs ~182 B/link for `key` layout when the RESP server uses
+`hash-max-listpack-value=256`. The request path becomes async (`handle()` returns a
 promise) since reads may hit the network. Writes and admin mutations work
 on any node. Live tests: `SHRT_KV_ADDR=127.0.0.1:6379 pnpm test`.
 
