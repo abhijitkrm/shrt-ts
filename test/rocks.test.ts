@@ -104,3 +104,41 @@ test("rocks restart persists corpus + hits", async () => {
     assert.equal(st?.hits, 2);
   } finally { s2.close(); }
 });
+
+test("rocks legacy value decode", async () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "shrt-rocks-")), "db");
+  const { default: rocksdb } = await import("rocksdb");
+  const openRaw = () => {
+    const db = rocksdb(dir);
+    return new Promise<any>((res, rej) =>
+      db.open((e: Error | null) => (e ? rej(e) : res(db))));
+  };
+  const close = (db: any) =>
+    new Promise<void>((res, rej) => db.close((e: Error | null) => (e ? rej(e) : res())));
+
+  // write a pre-version "{e}|{c}|{u}" row directly through the binding
+  {
+    const db = await openRaw();
+    await new Promise<void>((res, rej) =>
+      db.put("l:legacyR", "0|0|https://rocks-legacy.example",
+        (e: Error | null) => (e ? rej(e) : res())));
+    await close(db);
+  }
+  let code = "";
+  {
+    const st = await RocksStore.open(dir, 0, 1000, 50);
+    try {
+      assert.equal(await st.resolve("legacyR"), "https://rocks-legacy.example");
+      code = (await st.shorten("https://v1rocks.example"))!;
+      assert.ok(code);
+    } finally { await st.close(); }
+  }
+  // the new row carries the v1 tag
+  {
+    const db = await openRaw();
+    const v: Buffer = await new Promise((res, rej) =>
+      db.get(`l:${code}`, (e: Error | null, v?: Buffer) => (e ? rej(e) : res(v!))));
+    await close(db);
+    assert.ok(v.toString().startsWith("v1|"), `v1 tag: ${v}`);
+  }
+});

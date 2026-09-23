@@ -8,6 +8,7 @@
 // Multi-instance: the KV IS the shared state — no tailing, no convergence,
 // admin mutations work on any node.
 
+import * as metrics from "./metrics.js";
 import { Kv, type Resp } from "./kv.js";
 import type { Link } from "./store.js";
 import type { MutRes, StoreApi } from "./storeapi.js";
@@ -107,11 +108,12 @@ export class KvStore implements StoreApi {
     if (dels.length) await this.kv.pipe(dels);
   }
 
-  // "{e}|{c}|{u}" — legacy "{e}|{u}" decodes with c=0
+  // "v1|{e}|{c}|{u}" — legacy "{e}|{c}|{u}" and "{e}|{u}" decode with c=0
   private enc(e: number, c: number, u: string): string {
-    return `${e}|${c}|${u}`;
+    return `v1|${e}|${c}|${u}`;
   }
   private dec(v: string): { e: number; c: number; u: string } | null {
+    if (v.startsWith("v1|")) v = v.slice(3);
     const p = v.indexOf("|");
     if (p < 0) return null;
     const e = Number(v.slice(0, p));
@@ -191,14 +193,19 @@ export class KvStore implements StoreApi {
   async resolve(code: string): Promise<string | null> {
     const hit = this.cacheGet(code);
     if (hit) {
+      metrics.cacheHitInc();
       this.bump(code);
       return hit.u;
     }
+    metrics.cacheMissInc();
+    const t0 = performance.now();
     let v: Buffer | null;
     try {
       v = await this.kvGet(code);
     } catch {
       return null;
+    } finally {
+      metrics.storeRead(Math.round((performance.now() - t0) * 1000));
     }
     if (!v) return null;
     const d = this.dec(v.toString());
@@ -209,6 +216,7 @@ export class KvStore implements StoreApi {
   }
 
   async shorten(url: string, alias?: string, ttlMs = 0): Promise<string | null> {
+    metrics.storeWrite();
     const now = Date.now();
     const exp = ttlMs > 0 ? now + ttlMs : 0;
     try {
@@ -409,6 +417,16 @@ export class KvStore implements StoreApi {
     await this.shortenMany(urls);
     await this.flushHits().catch(() => {});
     return urls.length;
+  }
+
+  /** /api/health probe: RESP PING round-trip. */
+  async healthy(): Promise<boolean> {
+    try {
+      const r = await this.kv.cmd("PING");
+      return r.kind === "simple" && r.str === "PONG";
+    } catch {
+      return false;
+    }
   }
 
   async isEmpty(): Promise<boolean> {

@@ -280,6 +280,11 @@ export class Store {
     return this.data.size === 0;
   }
 
+  /** In-process engine is healthy whenever the process is. */
+  healthy(): boolean {
+    return true;
+  }
+
   /**
    * Update url/ttl in place. Durable only on the owning instance — mutations
    * are ordered within the owner's log, so "remote" tells the caller to route

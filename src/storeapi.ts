@@ -25,6 +25,8 @@ export interface StoreApi {
   stats(code: string): Link | null | Promise<Link | null>;
   seed(urls: string[]): number | Promise<number>;
   isEmpty(): boolean | Promise<boolean>;
+  /** /api/health probe — RESP PING / rocksdb point read / true for aof. */
+  healthy(): boolean | Promise<boolean>;
   flush(): void | Promise<void>;
   pollTails(): void;
   compact(): void;

@@ -1,3 +1,4 @@
+import { limiter, rateLimited, incLimited } from "./ratelimit.js";
 import {
   createServer,
   IncomingMessage,
@@ -114,6 +115,7 @@ async function shortenBulk(store: StoreApi, parsed: { urls?: unknown }): Promise
     return bad(`urls must be 1-${MAX_BULK_URLS} valid http(s) urls`);
   }
   const codes = await store.shortenMany(parsed.urls, LINK_TTL_MS);
+  metrics.linksDelta(codes.length);
   return { status: 201, body: JSON.stringify({ count: codes.length, codes }) };
 }
 
@@ -128,13 +130,29 @@ function parseBody(body?: string): Record<string, unknown> | Reply {
 const isReply = (v: unknown): v is Reply =>
   typeof (v as Reply).status === "number";
 
-/** Transport-agnostic request handler shared by node:http and uWS. */
+/** Transport-agnostic request handler shared by node:http and uWS.
+ *  `client` is the peer IP (or first X-Forwarded-For under TRUST_PROXY)
+ *  used for RATE_LIMIT accounting. */
 export async function handle(
   store: StoreApi,
   method: string,
   path: string,
   body?: string,
-  adminToken?: string
+  adminToken?: string,
+  client = ""
+): Promise<Reply> {
+  const r = await route(store, method, path, body, adminToken, client);
+  metrics.status(r.status);
+  return r;
+}
+
+async function route(
+  store: StoreApi,
+  method: string,
+  path: string,
+  body: string | undefined,
+  adminToken: string | undefined,
+  client: string
 ): Promise<Reply> {
   const q = path.indexOf("?");
   const pathname = q < 0 ? path : path.slice(0, q);
@@ -145,17 +163,33 @@ export async function handle(
   if (method === "OPTIONS") return { status: 204 };
 
   if (method === "GET") {
-    if (pathname === "/api/health") return { status: 200, body: '{"ok":true}' };
+    if (pathname === "/api/health") {
+      metrics.op(7);
+      return (await store.healthy())
+        ? { status: 200, body: '{"ok":true}' }
+        : { status: 503, body: '{"ok":false}' };
+    }
     if (pathname === "/api/metrics") {
+      metrics.op(8);
       return { status: 200, body: JSON.stringify(metrics.snapshot()) };
     }
+    if (pathname === "/metrics") {
+      metrics.op(8);
+      return {
+        status: 200,
+        body: metrics.prometheus(rateLimited),
+        ctype: "text/plain; version=0.0.4",
+      };
+    }
     if (pathname === "/") {
+      metrics.op(9);
       const html = uiHtml();
       return html === null
         ? { status: 404, body: '{"error":"not found"}' }
         : { status: 200, body: html, ctype: "text/html; charset=utf-8" };
     }
     if (pathname === "/api/links") {
+      metrics.op(5);
       const p = new URLSearchParams(query);
       const limit = Math.min(
         Math.max(Number(p.get("limit")) || 50, 1),
@@ -168,12 +202,14 @@ export async function handle(
       return { status: 200, body: JSON.stringify({ links, total }) };
     }
     if (pathname.startsWith("/api/stats/")) {
+      metrics.op(6);
       const link = await store.stats(pathname.slice(11));
       return link
         ? { status: 200, body: JSON.stringify(link) }
         : { status: 404, body: '{"error":"not found"}' };
     }
     const code = pathname.slice(1);
+    metrics.op(0);
     const target = CODE_RE.test(code) ? await store.resolve(code) : null;
     return target === null
       ? { status: 404, body: '{"error":"not found"}' }
@@ -182,10 +218,21 @@ export async function handle(
 
   if (method === "POST") {
     if (pathname !== "/api/shorten" && pathname !== "/api/shorten/bulk") {
+      metrics.op(10);
       return { status: 404, body: '{"error":"not found"}' };
     }
     const parsed = parseBody(body);
     if (isReply(parsed)) return parsed;
+    const cost =
+      pathname === "/api/shorten/bulk" && Array.isArray(parsed.urls)
+        ? Math.max(1, parsed.urls.length)
+        : 1;
+    if (!limiter().allow(client, cost)) {
+      incLimited();
+      metrics.op(10);
+      return { status: 429, body: '{"error":"rate limited"}' };
+    }
+    metrics.op(pathname === "/api/shorten" ? 1 : 2);
     return pathname === "/api/shorten"
       ? shortenOne(store, parsed)
       : shortenBulk(store, parsed);
@@ -198,8 +245,12 @@ export async function handle(
     const code = pathname.slice(11);
     if (!CODE_RE.test(code)) return bad("invalid code");
     if (method === "DELETE") {
+      metrics.op(4);
       const r = await store.remove(code);
-      if (r === "ok") return { status: 204 };
+      if (r === "ok") {
+        metrics.linksDelta(-1);
+        return { status: 204 };
+      }
       return r === "missing"
         ? { status: 404, body: '{"error":"not found"}' }
         : { status: 409, body: '{"error":"owned by another instance"}' };
@@ -210,6 +261,7 @@ export async function handle(
       if (typeof parsed.url !== "string" || !isValidUrl(parsed.url)) {
         return bad("invalid url");
       }
+      metrics.op(3);
       const r = await store.update(
         code,
         parsed.url,
@@ -269,20 +321,35 @@ function readBody(
   req.on("error", () => res.destroy());
 }
 
+const TRUST_PROXY = process.env.TRUST_PROXY !== undefined;
+
+/** Rate-limit key: first X-Forwarded-For hop under TRUST_PROXY, else peer. */
+function clientIp(xff: string | string[] | undefined, peer: string): string {
+  if (TRUST_PROXY && xff) {
+    const v = Array.isArray(xff) ? xff[0] : xff;
+    const first = v?.split(",", 1)[0]?.trim();
+    if (first) return first;
+  }
+  return peer;
+}
+
 export function createApp(store: StoreApi): Server {
   return createServer((req, res) => {
     const method = req.method ?? "GET";
     const path = req.url ?? "/";
     const token = req.headers["x-admin-token"];
     const admin = Array.isArray(token) ? token[0] : token;
+    const client = clientIp(req.headers["x-forwarded-for"],
+      req.socket.remoteAddress ?? "");
     if (method === "POST" || method === "PATCH") {
       const pathname = path.split("?", 1)[0];
       const limit = pathname === "/api/shorten/bulk" ? MAX_BULK_BODY : MAX_BODY;
       readBody(req, res, limit, (raw) => {
-        void handle(store, method, path, raw, admin).then((r) => send(res, r));
+        void handle(store, method, path, raw, admin, client).then((r) =>
+          send(res, r));
       });
     } else {
-      void handle(store, method, path, undefined, admin).then((r) =>
+      void handle(store, method, path, undefined, admin, client).then((r) =>
         send(res, r)
       );
     }

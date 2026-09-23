@@ -12,6 +12,7 @@
 // Embedded means single-writer: one process per ROCKSDB_PATH. For
 // multi-instance/multi-node use the RESP KV backend.
 
+import * as metrics from "./metrics.js";
 import rocksdb from "rocksdb";
 import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -106,8 +107,9 @@ export class RocksStore implements StoreApi {
   private lkey(c: string): string { return `l:${c}`; }
   private hkey(c: string): string { return `h:${c}`; }
 
-  private enc(e: number, c: number, u: string): string { return `${e}|${c}|${u}`; }
+  private enc(e: number, c: number, u: string): string { return `v1|${e}|${c}|${u}`; }
   private dec(v: string): { e: number; c: number; u: string } | null {
+    if (v.startsWith("v1|")) v = v.slice(3);
     const p = v.indexOf("|");
     if (p < 0) return null;
     const e = Number(v.slice(0, p));
@@ -209,8 +211,11 @@ export class RocksStore implements StoreApi {
 
   async resolve(code: string): Promise<string | null> {
     const ce = this.cacheGet(code);
-    if (ce) { this.bump(code); return ce.u; }
+    if (ce) { metrics.cacheHitInc(); this.bump(code); return ce.u; }
+    metrics.cacheMissInc();
+    const t0 = performance.now();
     const v = await pget(this.db, this.lkey(code)).catch(() => null);
+    metrics.storeRead(Math.round((performance.now() - t0) * 1000));
     if (!v) return null;
     const d = this.dec(v.toString());
     if (!d || (d.e !== 0 && d.e <= Date.now())) return null;
@@ -220,6 +225,7 @@ export class RocksStore implements StoreApi {
   }
 
   async shorten(url: string, alias?: string, ttlMs = 0): Promise<string | null> {
+    metrics.storeWrite();
     const now = Date.now();
     const exp = ttlMs > 0 ? now + ttlMs : 0;
     const put = async (code: string): Promise<boolean> => {
@@ -344,6 +350,16 @@ export class RocksStore implements StoreApi {
     await this.shortenMany(urls);
     await this.flushHits().catch(() => {});
     return urls.length;
+  }
+
+  /** /api/health probe: a point read proves the DB is open & readable. */
+  async healthy(): Promise<boolean> {
+    try {
+      await pget(this.db, "\x00health");
+      return true;
+    } catch (e) {
+      return e instanceof Error && e.message.startsWith("NotFound");
+    }
   }
 
   async isEmpty(): Promise<boolean> {

@@ -112,3 +112,20 @@ test("kv cache bounded", async (t) => {
   }
   for (const c of codes) assert.ok(await st.resolve(c), `cold miss ${c}`);
 });
+
+test("kv legacy value decode (key layout)", async (t) => {
+  if (skip || !st) return t.skip();
+  if (process.env.KV_LAYOUT === "hash") return t.skip("key layout only");
+  const kv = await Kv.connect(ADDR!, 1);
+  try {
+    await kv.set("l:legacy1", "0|https://one.example", 0, false);
+    await kv.set("l:legacy2", "0|0|https://two.example", 0, false);
+    assert.equal(await st.resolve("legacy1"), "https://one.example");
+    assert.equal(await st.resolve("legacy2"), "https://two.example");
+    await st.shorten("https://v1.example", "v1check", 0);
+    const raw = await kv.get("l:v1check");
+    assert.ok(raw && raw.toString().startsWith("v1|"), `v1 tag: ${raw}`);
+  } finally {
+    kv.close();
+  }
+});

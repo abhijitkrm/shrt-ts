@@ -236,6 +236,18 @@ test("mutations are 404 without admin token; work with it", async () => {
     404
   );
 
+  // empty ADMIN_TOKEN must also fail closed
+  process.env.ADMIN_TOKEN = "";
+  assert.equal(
+    (
+      await fetch(`${base}/api/links/${code}`, {
+        method: "DELETE",
+        headers: { "x-admin-token": "" },
+      })
+    ).status,
+    404
+  );
+
   // token set but not provided -> still 404; wrong token -> 404
   process.env.ADMIN_TOKEN = "secret";
   assert.equal(
@@ -317,4 +329,49 @@ test("DELETE removes link and frees alias", async () => {
     body: JSON.stringify({ url: "https://new.example", alias: "todelete" }),
   });
   assert.equal(reuse.status, 201);
+});
+
+test("prometheus /metrics endpoint", async () => {
+  await fetch(`${base}/api/shorten`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://prom.example" }),
+  });
+  const res = await fetch(`${base}/metrics`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "text/plain; version=0.0.4");
+  const body = await res.text();
+  for (const want of [
+    "# TYPE shrt_requests_total counter",
+    'shrt_requests_total{op="shorten"}',
+    "shrt_links_total",
+    "shrt_uptime_seconds",
+    "shrt_rate_limited_total",
+  ]) {
+    assert.ok(body.includes(want), `missing ${want} in ${body}`);
+  }
+});
+
+test("per-IP rate limit on POST /api/shorten", async () => {
+  const { initForTest, reloadForTest } = await import("../src/ratelimit.js");
+  initForTest(1, 4);
+  try {
+    let last = 0, oks = 0;
+    for (let i = 0; i < 10; i++) {
+      const r = await fetch(`${base}/api/shorten`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: "https://rl.example" }),
+      });
+      last = r.status;
+      if (last === 201) { oks++; continue; }
+      break;
+    }
+    assert.equal(last, 429);
+    assert.ok(oks <= 4, `oks=${oks}`);
+    const g = await fetch(`${base}/nope`);
+    assert.equal(g.status, 404); // reads not limited
+  } finally {
+    reloadForTest();
+  }
 });

@@ -45,11 +45,12 @@ pnpm bench            # build + spawn real servers + autocannon scenarios
 | `OPTIONS` | any | `204` CORS preflight |
 | `GET` | `/` | single-file UI (`ui/index.html`) — 404 if absent |
 | `GET` | `/api/metrics` | `{req_s, total, uptime_s, per_second[31]}` — live request counters |
+| `GET` | `/metrics` | Prometheus text exposition (`shrt_*` counters/gauges) |
 | `GET` | `/api/health` | `{ok: true}` |
 
 CORS: `Access-Control-Allow-Origin` on every response (`CORS_ORIGIN` env, default `*`).
 
-`PATCH`/`DELETE` are hidden unless `ADMIN_TOKEN` is set, then require the
+`PATCH`/`DELETE` are hidden unless `ADMIN_TOKEN` is set non-empty, then require the
 `x-admin-token` header — links are immutable to the public. They're durable only
 on the instance that owns the code (mutations are ordered within the owner's
 log); `409` means route to the owning instance — for generated codes that's
@@ -71,7 +72,10 @@ Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 | `HITS` | `1` | `0` disables hit counting (removes ~2 map ops/redirect) |
 | `TAIL_MS` | `0` | >0 enables periodic sibling-log polling (on-miss always on) |
 | `CORS_ORIGIN` | `*` | value of `Access-Control-Allow-Origin` |
-| `ADMIN_TOKEN` | unset | enables PATCH/DELETE; requests need `x-admin-token: <value>` |
+| `ADMIN_TOKEN` | unset | enables PATCH/DELETE; requests need `x-admin-token: <value>`; unset or empty = routes fail closed |
+| `RATE_LIMIT` | `0` | per-IP token-bucket rate (requests/s) on POST shorten routes; `0` disables |
+| `RATE_LIMIT_BURST` | `RATE_LIMIT` | bucket capacity; bulk shorten costs one token per URL |
+| `TRUST_PROXY` | unset | set to take client IP from `x-forwarded-for` |
 | `LINK_TTL_MS` | `86400000` | default **and max** link lifetime — every link expires ≤1 day |
 | `STORE` | `aof` | `aof` in-process engine, `dragonfly`/`redis` external RESP KV, or `rocksdb` embedded LSM |
 | `ROCKSDB_PATH` | `{DATA_DIR}/rocks` | embedded RocksDB dir for `STORE=rocksdb` (single-writer file lock) |

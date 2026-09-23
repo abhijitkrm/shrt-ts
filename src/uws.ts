@@ -49,6 +49,13 @@ export function createUwsApp(store: StoreApi): uWS.TemplatedApp {
     const qs = req.getQuery();
     const path = qs ? `${url}?${qs}` : url;
     const admin = req.getHeader("x-admin-token") || undefined;
+    const peer = Buffer.from(res.getRemoteAddressAsText()).toString();
+    let client = peer;
+    if (process.env.TRUST_PROXY !== undefined) {
+      const xff = req.getHeader("x-forwarded-for");
+      const first = xff.split(",", 1)[0]?.trim();
+      if (first) client = first;
+    }
     if (method === "POST" || method === "PATCH") {
       const chunks: Buffer[] = [];
       let size = 0;
@@ -73,7 +80,7 @@ export function createUwsApp(store: StoreApi): uWS.TemplatedApp {
             chunks.length === 1
               ? chunks[0].toString()
               : Buffer.concat(chunks).toString();
-          void handle(store, method, path, raw, admin).then((r) => {
+          void handle(store, method, path, raw, admin, client).then((r) => {
             if (done) return;
             res.cork(() => respond(res, r));
           });
@@ -85,7 +92,7 @@ export function createUwsApp(store: StoreApi): uWS.TemplatedApp {
     res.onAborted(() => {
       done = true;
     });
-    void handle(store, method, path, undefined, admin).then((r) => {
+    void handle(store, method, path, undefined, admin, client).then((r) => {
       if (done) return;
       res.cork(() => respond(res, r));
     });
