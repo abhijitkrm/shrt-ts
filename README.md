@@ -73,7 +73,9 @@ Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 | `CORS_ORIGIN` | `*` | value of `Access-Control-Allow-Origin` |
 | `ADMIN_TOKEN` | unset | enables PATCH/DELETE; requests need `x-admin-token: <value>` |
 | `LINK_TTL_MS` | `86400000` | default **and max** link lifetime — every link expires ≤1 day |
-| `STORE` | `aof` | `aof` in-process engine, or `dragonfly`/`redis` external RESP KV |
+| `STORE` | `aof` | `aof` in-process engine, `dragonfly`/`redis` external RESP KV, or `rocksdb` embedded LSM |
+| `ROCKSDB_PATH` | `{DATA_DIR}/rocks` | embedded RocksDB dir for `STORE=rocksdb` (single-writer file lock) |
+| `ROCKSDB_SWEEP_MS` | `3600000` | expired-key sweep interval (rocksdb mode) |
 | `DRAGONFLY_ADDR` | `127.0.0.1:6379` | RESP endpoint (`KV_ADDR` also accepted) |
 | `CACHE` | `100000` | bounded hot FIFO entries kept in-process over the KV |
 | `CACHE_TTL_MS` | `5000` | staleness bound for cached entries |
@@ -83,7 +85,7 @@ Generated codes: exactly 8 chars, `[0-9a-zA-Z]` (`ALPHABET[instance]` prefix +
 
 With `STORE=dragonfly` the whole corpus lives in the RESP store (keys
 `l:{code}` → `{exp}|{created}|{url}`, `h:{code}` → hit counter, batched
-`INCRBY` every 5 ms) — process memory stays flat as links grow; a cache
+`INCRBY` every 5 ms — see `KV_LAYOUT=hash` for the ~40%-leaner packing) — process memory stays flat as links grow; a cache
 miss costs one `GET`. With `KV_LAYOUT=hash` the same record is a field
 `{code}` inside bucket `l:{shard(code) % KV_BUCKETS}` and hits live in
 field `h:{code}` of the same bucket (`HSETNX`/`HINCRBY`) — measured ~112
@@ -91,6 +93,14 @@ B/link vs ~182 B/link for `key` layout when the RESP server uses
 `hash-max-listpack-value=256`. The request path becomes async (`handle()` returns a
 promise) since reads may hit the network. Writes and admin mutations work
 on any node. Live tests: `SHRT_KV_ADDR=127.0.0.1:6379 pnpm test`.
+
+`STORE=rocksdb` keeps the corpus on local disk in an embedded RocksDB
+(via the `rocksdb` npm binding — same `l:`/`h:` key schema, hit counters
+written as absolute values per flush since the store is single-writer).
+Expiry enforced on read + a `ROCKSDB_SWEEP_MS` iterator sweep; reads hit
+the bounded FIFO cache first. One process per `ROCKSDB_PATH` — for
+multi-instance/multi-node use the RESP backend. In-process tests:
+`test/rocks.test.ts` (7 tests incl. restart persistence).
 
 ## Performance
 
